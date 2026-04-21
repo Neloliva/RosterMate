@@ -1,13 +1,17 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { CopyConfirmModal, type CopySource } from "./CopyConfirmModal";
 
 type RunningAction = "copy" | "undo" | null;
+
+type CopyResult = { copied: number; available: number };
 
 export function QuickActions({
   onAddShift,
   onAddStaff,
   onCopyLastWeek,
+  onCopyLastMonth,
   onGenerateReport,
   onPreviewOptimize,
   canUndoOptimize,
@@ -15,7 +19,8 @@ export function QuickActions({
 }: {
   onAddShift: () => void;
   onAddStaff: () => void;
-  onCopyLastWeek: () => Promise<{ copied: number; available: number }>;
+  onCopyLastWeek: () => Promise<CopyResult>;
+  onCopyLastMonth: () => Promise<CopyResult>;
   onGenerateReport: () => void;
   onPreviewOptimize: () => void;
   canUndoOptimize: boolean;
@@ -24,25 +29,29 @@ export function QuickActions({
   const [pending, startTransition] = useTransition();
   const [running, setRunning] = useState<RunningAction>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [copyOpen, setCopyOpen] = useState(false);
 
-  function handleCopy() {
+  function handleConfirmCopy(source: CopySource) {
     setMessage(null);
     setRunning("copy");
     startTransition(async () => {
       try {
-        const { copied, available } = await onCopyLastWeek();
+        const action = source === "week" ? onCopyLastWeek : onCopyLastMonth;
+        const { copied, available } = await action();
+        const label = source === "week" ? "last week" : "last 4 weeks";
         if (available === 0) {
-          setMessage("Last week has no shifts to copy.");
+          setMessage(`${label[0].toUpperCase() + label.slice(1)} had no shifts to copy.`);
         } else if (copied === 0) {
-          setMessage("This week already has shifts in every matching cell.");
+          setMessage("Every matching cell already has a shift — nothing copied.");
         } else {
           setMessage(
-            `Copied ${copied} shift${copied === 1 ? "" : "s"} from last week.`,
+            `Copied ${copied} shift${copied === 1 ? "" : "s"} from ${label}.`,
           );
         }
+        setCopyOpen(false);
       } catch (e) {
         setMessage(
-          e instanceof Error ? e.message : "Couldn't copy last week.",
+          e instanceof Error ? e.message : "Couldn't copy schedule.",
         );
       } finally {
         setRunning(null);
@@ -90,7 +99,10 @@ export function QuickActions({
           <span>Add New Staff</span>
         </button>
         <button
-          onClick={handleCopy}
+          onClick={() => {
+            setMessage(null);
+            setCopyOpen(true);
+          }}
           disabled={pending}
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -131,6 +143,13 @@ export function QuickActions({
       {message && (
         <p className="mt-3 text-xs font-medium text-slate-600">{message}</p>
       )}
+
+      <CopyConfirmModal
+        open={copyOpen}
+        pending={pending && running === "copy"}
+        onConfirm={handleConfirmCopy}
+        onClose={() => setCopyOpen(false)}
+      />
     </div>
   );
 }

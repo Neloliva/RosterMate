@@ -16,6 +16,7 @@ import { StaffAvailability } from "./StaffAvailability";
 import { StaffEditor } from "./StaffEditor";
 import { SuggestionsModal } from "./SuggestionsModal";
 import {
+  copyLastMonth,
   copyLastWeek,
   deleteShift as deleteShiftAction,
   moveShift,
@@ -458,6 +459,10 @@ export function RosterWorkspace({
             onCopyLastWeek={async () => {
               setUndoSnapshot(null);
               return copyLastWeek(weekStart);
+            }}
+            onCopyLastMonth={async () => {
+              setUndoSnapshot(null);
+              return copyLastMonth(weekStart);
             }}
             onGenerateReport={() => setReportOpen(true)}
             onPreviewOptimize={() => setOptimizePreviewOpen(true)}

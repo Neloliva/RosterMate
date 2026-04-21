@@ -200,6 +200,69 @@ export async function addStaff(input: {
   revalidatePath("/");
 }
 
+export async function copyLastMonth(currentWeekStart: string): Promise<{
+  copied: number;
+  available: number;
+}> {
+  // Take the 4 weeks prior and map them onto the current week plus the next
+  // three, in order. Same "fill empties only" rule as copyLastWeek.
+  const targetWeeks = [0, 1, 2, 3].map((i) => addDays(currentWeekStart, i * 7));
+  const sourceWeeks = targetWeeks.map((ws) => addDays(ws, -28));
+  const allWeeks = [...sourceWeeks, ...targetWeeks];
+
+  const rows = await db
+    .select()
+    .from(shifts)
+    .where(inArray(shifts.weekStart, allWeeks));
+
+  const bySource = new Map<string, typeof rows>();
+  const byTarget = new Map<string, typeof rows>();
+  for (const ws of sourceWeeks) bySource.set(ws, []);
+  for (const ws of targetWeeks) byTarget.set(ws, []);
+  for (const r of rows) {
+    if (bySource.has(r.weekStart)) bySource.get(r.weekStart)!.push(r);
+    if (byTarget.has(r.weekStart)) byTarget.get(r.weekStart)!.push(r);
+  }
+
+  let available = 0;
+  const inserts: {
+    id: string;
+    weekStart: string;
+    staffId: string;
+    day: number;
+    startHour: number;
+    endHour: number;
+    cost: number;
+  }[] = [];
+
+  for (let i = 0; i < targetWeeks.length; i++) {
+    const src = bySource.get(sourceWeeks[i]) ?? [];
+    const tgt = byTarget.get(targetWeeks[i]) ?? [];
+    available += src.length;
+    const occupied = new Set(tgt.map((s) => `${s.staffId}:${s.day}`));
+    for (const s of src) {
+      if (!occupied.has(`${s.staffId}:${s.day}`)) {
+        inserts.push({
+          id: newId("sh"),
+          weekStart: targetWeeks[i],
+          staffId: s.staffId,
+          day: s.day,
+          startHour: s.startHour,
+          endHour: s.endHour,
+          cost: s.cost,
+        });
+      }
+    }
+  }
+
+  if (inserts.length > 0) {
+    await db.insert(shifts).values(inserts);
+    revalidatePath("/");
+  }
+
+  return { copied: inserts.length, available };
+}
+
 export async function fetchRangeShifts(
   weekStarts: string[],
 ): Promise<Record<string, Shift[]>> {
