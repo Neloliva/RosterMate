@@ -20,6 +20,11 @@ import {
   type EfficiencyLevel,
   type Trend,
 } from "@/lib/report";
+import {
+  exportReportToPdf,
+  exportReportToWord,
+  type ReportExportContext,
+} from "@/lib/report-export";
 import type { Shift, Staff } from "@/lib/types";
 
 type Mode = "weekly" | "monthly" | "custom";
@@ -151,6 +156,7 @@ export function ReportModal({
   );
   const [prior, setPrior] = useState<Record<string, Shift[]> | null>(null);
   const [loading, startLoad] = useTransition();
+  const [downloadOpen, setDownloadOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -325,9 +331,38 @@ export function ReportModal({
         ? "Monthly report"
         : "Custom range report";
 
-  function handleDownload() {
+  const exportCtx: ReportExportContext = {
+    title: reportHeading,
+    subtitle: label,
+    report,
+    compliance,
+    staffWithStatus,
+    topSuggestions,
+    suggestionCount: suggestions.length,
+    totalSavings,
+    annualCurrent,
+    annualOptimized,
+    annualDiff,
+    weeklySavingsAvg,
+    penaltyPct,
+    penaltyTargetPct: PENALTY_TARGET_PCT,
+    avgCostPerHour,
+    numWeeks,
+  };
+  const baseName = `rostermate-${fileSuffix(mode, weekStarts)}`;
+
+  function handleDownloadCsv() {
     const csv = toCsv(currentShiftsByWeek, staff);
-    downloadCsv(`rostermate-${fileSuffix(mode, weekStarts)}.csv`, csv);
+    downloadCsv(`${baseName}.csv`, csv);
+    setDownloadOpen(false);
+  }
+  function handleDownloadPdf() {
+    exportReportToPdf(exportCtx, `${baseName}.pdf`);
+    setDownloadOpen(false);
+  }
+  function handleDownloadWord() {
+    exportReportToWord(exportCtx, `${baseName}.doc`);
+    setDownloadOpen(false);
   }
 
   return (
@@ -820,13 +855,44 @@ export function ReportModal({
           >
             Close
           </button>
-          <button
-            onClick={handleDownload}
-            disabled={report.totalShifts === 0}
-            className="rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            Download CSV
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setDownloadOpen((o) => !o)}
+              disabled={report.totalShifts === 0}
+              className="flex items-center gap-1.5 rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <span>Download</span>
+              <span aria-hidden className="text-xs">
+                ▾
+              </span>
+            </button>
+            {downloadOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setDownloadOpen(false)}
+                  aria-hidden
+                />
+                <div className="absolute bottom-full right-0 z-20 mb-1 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                  <DownloadMenuItem
+                    label="CSV"
+                    hint="For Excel / MYOB / Xero"
+                    onClick={handleDownloadCsv}
+                  />
+                  <DownloadMenuItem
+                    label="PDF"
+                    hint="Formatted, printable"
+                    onClick={handleDownloadPdf}
+                  />
+                  <DownloadMenuItem
+                    label="Word"
+                    hint="Editable .doc file"
+                    onClick={handleDownloadWord}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -897,5 +963,25 @@ function ComplianceRow({ ok, text }: { ok: boolean; text: string }) {
       </span>
       <span className="text-slate-700">{text}</span>
     </li>
+  );
+}
+
+function DownloadMenuItem({
+  label,
+  hint,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm transition last:border-b-0 hover:bg-slate-50"
+    >
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="text-[11px] text-slate-500">{hint}</div>
+    </button>
   );
 }
