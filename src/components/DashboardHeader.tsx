@@ -29,17 +29,14 @@ export function DashboardHeader({
           </h1>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-          <span aria-hidden>✅</span>
-          <span>Fair Work Compliant</span>
-          <span className="text-emerald-500">|</span>
-          <span className="text-emerald-700/90">
-            All 122 Australian Awards Supported
-          </span>
+          <span aria-hidden>🛠</span>
+          <span>Built for Australian award compliance</span>
           <InfoTooltip label="Why RosterMate?" align="left">
             <p className="leading-snug">
-              RosterMate automatically calculates penalty rates, casual
-              loading, and break requirements for all 122 Australian Modern
-              Awards. No more Fair Work violations or underpayment penalties.
+              RosterMate models a generic Australian award ruleset: weekend and
+              Sunday penalty rates, night loading (7pm–7am), casual loading, and
+              automatic break deduction at 5h and 9h. Full Fair Work award-rate
+              coverage requires a licensed data feed — see DEFERRED.md.
             </p>
           </InfoTooltip>
         </div>

@@ -181,10 +181,20 @@ export async function addStaff(input: {
   role: string;
   employmentType: EmploymentType;
   baseRate: number;
+  businessType?: string;
+  age?: number | null;
+  isJunior?: boolean;
+  qualifications?: string[];
+  registrationNumber?: string | null;
 }) {
   const name = input.name.trim();
   if (!name) throw new Error("Name is required");
   if (!(input.baseRate > 0)) throw new Error("Base rate must be positive");
+
+  const quals = Array.isArray(input.qualifications)
+    ? input.qualifications.filter((q): q is string => typeof q === "string")
+    : [];
+  const reg = (input.registrationNumber ?? "").trim() || null;
 
   await db.insert(staff).values({
     id: newId("st"),
@@ -195,6 +205,11 @@ export async function addStaff(input: {
     employmentType: input.employmentType,
     hoursThisWeek: 0,
     availability: "available",
+    businessType: input.businessType ?? null,
+    age: input.age ?? null,
+    isJunior: Boolean(input.isJunior),
+    qualifications: JSON.stringify(quals),
+    registrationNumber: reg,
   });
 
   revalidatePath("/");

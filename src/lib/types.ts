@@ -11,7 +11,13 @@ export const COMMON_ROLES: Role[] = [
 
 export type AvailabilityStatus = "available" | "limited" | "unavailable";
 
-export type EmploymentType = "casual" | "part_time" | "full_time";
+export type EmploymentType =
+  | "casual"
+  | "part_time"
+  | "full_time"
+  | "fixed_term"
+  | "apprentice"
+  | "trainee";
 
 export type Staff = {
   id: string;
@@ -22,6 +28,10 @@ export type Staff = {
   availability: AvailabilityStatus;
   baseRate: number; // award base hourly rate
   employmentType: EmploymentType;
+  age?: number | null;
+  isJunior?: boolean;
+  qualifications?: string[];
+  registrationNumber?: string | null;
 };
 
 export type Shift = {

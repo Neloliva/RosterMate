@@ -44,16 +44,30 @@ export default async function DashboardPage({
       .where(inArray(shiftsTable.weekStart, allWeekStarts)),
   ]);
 
-  const staff: Staff[] = staffRows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    role: r.role as Role,
-    initials: r.initials,
-    hoursThisWeek: r.hoursThisWeek,
-    availability: r.availability as AvailabilityStatus,
-    baseRate: r.baseRate,
-    employmentType: r.employmentType as EmploymentType,
-  }));
+  const staff: Staff[] = staffRows.map((r) => {
+    let qualifications: string[] = [];
+    try {
+      const parsed = JSON.parse(r.qualifications ?? "[]");
+      if (Array.isArray(parsed))
+        qualifications = parsed.filter((x): x is string => typeof x === "string");
+    } catch {
+      // ignore malformed
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      role: r.role as Role,
+      initials: r.initials,
+      hoursThisWeek: r.hoursThisWeek,
+      availability: r.availability as AvailabilityStatus,
+      baseRate: r.baseRate,
+      employmentType: r.employmentType as EmploymentType,
+      age: r.age ?? null,
+      isJunior: Boolean(r.isJunior),
+      qualifications,
+      registrationNumber: r.registrationNumber ?? null,
+    };
+  });
 
   const shiftsByWeek: Record<string, Shift[]> = {};
   for (const ws of allWeekStarts) shiftsByWeek[ws] = [];

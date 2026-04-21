@@ -15,6 +15,11 @@ export const staff = sqliteTable("staff", {
   employmentType: text("employment_type").notNull(),
   hoursThisWeek: integer("hours_this_week").notNull().default(0),
   availability: text("availability").notNull().default("available"),
+  businessType: text("business_type"),
+  age: integer("age"),
+  isJunior: integer("is_junior", { mode: "boolean" }).default(false),
+  qualifications: text("qualifications").default("[]"),
+  registrationNumber: text("registration_number"),
 });
 
 export const shifts = sqliteTable(

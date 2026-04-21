@@ -69,6 +69,32 @@ function initDb() {
     .prepare("DELETE FROM shifts WHERE week_start = ?")
     .run(LEGACY_WEEK);
 
+  // Idempotent column migrations — add fields introduced after the initial
+  // schema so existing dev DBs upgrade in place.
+  const staffCols = sqlite
+    .prepare("PRAGMA table_info(staff)")
+    .all() as { name: string }[];
+  const existing = new Set(staffCols.map((c) => c.name));
+  if (!existing.has("business_type")) {
+    sqlite.exec("ALTER TABLE staff ADD COLUMN business_type TEXT");
+  }
+  if (!existing.has("age")) {
+    sqlite.exec("ALTER TABLE staff ADD COLUMN age INTEGER");
+  }
+  if (!existing.has("is_junior")) {
+    sqlite.exec(
+      "ALTER TABLE staff ADD COLUMN is_junior INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+  if (!existing.has("qualifications")) {
+    sqlite.exec(
+      "ALTER TABLE staff ADD COLUMN qualifications TEXT NOT NULL DEFAULT '[]'",
+    );
+  }
+  if (!existing.has("registration_number")) {
+    sqlite.exec("ALTER TABLE staff ADD COLUMN registration_number TEXT");
+  }
+
   // Seed staff on first run.
   const staffCount = sqlite
     .prepare("SELECT COUNT(*) as c FROM staff")
