@@ -58,3 +58,11 @@ export type Insight = {
   title: string;
   detail: string;
 };
+
+export type BusinessSettings = {
+  businessName: string;
+  businessType: string;
+  penaltyTargetPct: number;
+  overtimeHours: number;
+  defaultView: "week" | "month";
+};

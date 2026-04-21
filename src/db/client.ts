@@ -62,7 +62,23 @@ function initDb() {
 
     CREATE UNIQUE INDEX IF NOT EXISTS shifts_cell_unique
       ON shifts(week_start, staff_id, day);
+
+    CREATE TABLE IF NOT EXISTS business_settings (
+      id TEXT PRIMARY KEY,
+      business_name TEXT NOT NULL,
+      business_type TEXT NOT NULL,
+      penalty_target_pct REAL NOT NULL,
+      overtime_hours INTEGER NOT NULL,
+      default_view TEXT NOT NULL
+    );
   `);
+
+  // Singleton settings row — insert defaults on first run.
+  sqlite
+    .prepare(
+      "INSERT OR IGNORE INTO business_settings (id, business_name, business_type, penalty_target_pct, overtime_hours, default_view) VALUES ('default', 'My Business', 'cafe', 15, 38, 'week')",
+    )
+    .run();
 
   // Legacy cleanup — original seed used a Tuesday as the "Monday" anchor.
   sqlite

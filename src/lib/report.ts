@@ -246,10 +246,14 @@ function shiftHitsNight(shift: Shift): boolean {
   return shift.startHour < 7 || shift.endHour > 19;
 }
 
+export type ComplianceOptions = { overtimeHours?: number };
+
 export function complianceStats(
   shiftsByWeek: Record<string, Shift[]>,
   staff: Staff[],
+  options: ComplianceOptions = {},
 ): ComplianceStats {
+  const OVERTIME_HOURS = options.overtimeHours ?? 38;
   const staffById = new Map(staff.map((s) => [s.id, s]));
   let shiftsTriggeringBreak = 0;
   let weekendShifts = 0;
@@ -284,7 +288,7 @@ export function complianceStats(
     }
 
     for (const [id, hours] of hoursPerStaff) {
-      if (hours > 38) {
+      if (hours > OVERTIME_HOURS) {
         const entry = overtimeBy.get(id) ?? [];
         entry.push({ weekStart, hours: Math.round(hours * 10) / 10 });
         overtimeBy.set(id, entry);

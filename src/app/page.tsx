@@ -1,10 +1,15 @@
-import { inArray } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { RosterWorkspace } from "@/components/RosterWorkspace";
 import { db } from "@/db/client";
-import { shifts as shiftsTable, staff as staffTable } from "@/db/schema";
+import {
+  businessSettings as settingsTable,
+  shifts as shiftsTable,
+  staff as staffTable,
+} from "@/db/schema";
 import { addDays, startOfWeek } from "@/lib/date";
 import type {
   AvailabilityStatus,
+  BusinessSettings,
   EmploymentType,
   Role,
   Shift,
@@ -15,14 +20,44 @@ export const MONTH_WEEK_COUNT = 4;
 
 type ViewMode = "week" | "month";
 
+const DEFAULT_SETTINGS: BusinessSettings = {
+  businessName: "My Business",
+  businessType: "cafe",
+  penaltyTargetPct: 15,
+  overtimeHours: 38,
+  defaultView: "week",
+};
+
 export default async function DashboardPage({
   searchParams,
 }: {
   searchParams: Promise<{ weekStart?: string; view?: string }>;
 }) {
   const params = await searchParams;
+
+  const settingsRows = await db
+    .select()
+    .from(settingsTable)
+    .where(eq(settingsTable.id, "default"));
+  const settingsRow = settingsRows[0];
+  const settings: BusinessSettings = settingsRow
+    ? {
+        businessName: settingsRow.businessName,
+        businessType: settingsRow.businessType,
+        penaltyTargetPct: settingsRow.penaltyTargetPct,
+        overtimeHours: settingsRow.overtimeHours,
+        defaultView:
+          settingsRow.defaultView === "month" ? "month" : "week",
+      }
+    : DEFAULT_SETTINGS;
+
   const weekStart = params.weekStart ?? startOfWeek(new Date());
-  const view: ViewMode = params.view === "month" ? "month" : "week";
+  const view: ViewMode =
+    params.view === "month"
+      ? "month"
+      : params.view === "week"
+        ? "week"
+        : settings.defaultView;
   const scopeWeeks = view === "month" ? MONTH_WEEK_COUNT : 1;
 
   // Current scope: 1 week (week view) or 4 weeks (month view).
@@ -95,6 +130,7 @@ export default async function DashboardPage({
         shifts={shifts}
         shiftsByWeek={shiftsByWeek}
         priorWeekStarts={priorWeekStarts}
+        settings={settings}
       />
     </main>
   );

@@ -3,7 +3,7 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db/client";
-import { shifts, staff } from "@/db/schema";
+import { businessSettings, shifts, staff } from "@/db/schema";
 import { calculateShiftCost } from "@/lib/award";
 import { addDays } from "@/lib/date";
 import { initialsOf } from "@/lib/initials";
@@ -211,6 +211,39 @@ export async function addStaff(input: {
     qualifications: JSON.stringify(quals),
     registrationNumber: reg,
   });
+
+  revalidatePath("/");
+}
+
+export async function updateBusinessSettings(input: {
+  businessName: string;
+  businessType: string;
+  penaltyTargetPct: number;
+  overtimeHours: number;
+  defaultView: "week" | "month";
+}) {
+  const name = input.businessName.trim();
+  if (!name) throw new Error("Business name is required");
+  if (!(input.penaltyTargetPct >= 0 && input.penaltyTargetPct <= 100)) {
+    throw new Error("Penalty target must be between 0 and 100");
+  }
+  if (!Number.isInteger(input.overtimeHours) || input.overtimeHours < 1) {
+    throw new Error("Overtime threshold must be a positive whole number");
+  }
+  if (input.defaultView !== "week" && input.defaultView !== "month") {
+    throw new Error("Default view must be week or month");
+  }
+
+  await db
+    .update(businessSettings)
+    .set({
+      businessName: name,
+      businessType: input.businessType,
+      penaltyTargetPct: input.penaltyTargetPct,
+      overtimeHours: input.overtimeHours,
+      defaultView: input.defaultView,
+    })
+    .where(eq(businessSettings.id, "default"));
 
   revalidatePath("/");
 }

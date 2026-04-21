@@ -44,5 +44,15 @@ export const shifts = sqliteTable(
   }),
 );
 
+export const businessSettings = sqliteTable("business_settings", {
+  id: text("id").primaryKey(),
+  businessName: text("business_name").notNull(),
+  businessType: text("business_type").notNull(),
+  penaltyTargetPct: real("penalty_target_pct").notNull(),
+  overtimeHours: integer("overtime_hours").notNull(),
+  defaultView: text("default_view").notNull(),
+});
+
 export type StaffRow = typeof staff.$inferSelect;
 export type ShiftRow = typeof shifts.$inferSelect;
+export type BusinessSettingsRow = typeof businessSettings.$inferSelect;

@@ -29,7 +29,7 @@ import type { Shift, Staff } from "@/lib/types";
 
 type Mode = "weekly" | "monthly" | "custom";
 
-const PENALTY_TARGET_PCT = 15;
+const DEFAULT_penaltyTargetPct = 15;
 const MONTHS = [
   "Jan",
   "Feb",
@@ -135,6 +135,8 @@ export function ReportModal({
   shifts: initialShifts,
   priorShifts: initialPriorShifts,
   suggestions: initialSuggestions,
+  penaltyTargetPct = DEFAULT_penaltyTargetPct,
+  overtimeHours,
   onClose,
 }: {
   open: boolean;
@@ -145,6 +147,8 @@ export function ReportModal({
   shifts: Shift[];
   priorShifts: Shift[];
   suggestions: Suggestion[];
+  penaltyTargetPct?: number;
+  overtimeHours?: number;
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("weekly");
@@ -275,7 +279,9 @@ export function ReportModal({
     0,
   );
   const priorHas = priorTotalShifts > 0;
-  const compliance = complianceStats(currentShiftsByWeek, staff);
+  const compliance = complianceStats(currentShiftsByWeek, staff, {
+    overtimeHours,
+  });
   const staffWithStatus = scoreStaffEfficiency(report.byStaff);
 
   const numWeeks = Math.max(1, report.numWeeks);
@@ -345,7 +351,7 @@ export function ReportModal({
     annualDiff,
     weeklySavingsAvg,
     penaltyPct,
-    penaltyTargetPct: PENALTY_TARGET_PCT,
+    penaltyTargetPct: penaltyTargetPct,
     avgCostPerHour,
     numWeeks,
   };
@@ -517,7 +523,7 @@ export function ReportModal({
                   </div>
                   <div
                     className={
-                      penaltyPct > PENALTY_TARGET_PCT
+                      penaltyPct > penaltyTargetPct
                         ? "font-semibold text-rose-600"
                         : "font-semibold text-emerald-600"
                     }
@@ -534,14 +540,14 @@ export function ReportModal({
                 </div>
                 <ProgressBar
                   current={penaltyPct}
-                  target={PENALTY_TARGET_PCT}
+                  target={penaltyTargetPct}
                 />
                 <div className="mt-1 flex justify-between text-[10px] text-slate-500">
                   <span>
                     {formatCurrency(report.penaltyPremium)} weekend / night /
                     casual loading
                   </span>
-                  <span>Target: {PENALTY_TARGET_PCT}%</span>
+                  <span>Target: {penaltyTargetPct}%</span>
                 </div>
               </div>
             )}

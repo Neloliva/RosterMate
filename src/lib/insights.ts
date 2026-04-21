@@ -11,8 +11,10 @@ export type Insight = {
   tone: InsightTone;
 };
 
-const OVERTIME_HOURS = 38;
+const DEFAULT_OVERTIME_HOURS = 38;
 const PENALTY_CONCENTRATION_THRESHOLD = 0.2;
+
+export type InsightOptions = { overtimeHours?: number };
 const WEEKDAY_NAMES = [
   "Monday",
   "Tuesday",
@@ -29,7 +31,9 @@ function paidHoursOf(shift: Shift): number {
 export function computeInsights(
   shifts: Shift[],
   staff: Staff[],
+  options: InsightOptions = {},
 ): Insight[] {
+  const OVERTIME_HOURS = options.overtimeHours ?? DEFAULT_OVERTIME_HOURS;
   const out: Insight[] = [];
   const staffById = new Map(staff.map((s) => [s.id, s]));
 
@@ -134,7 +138,9 @@ function shortDateOf(iso: string): string {
 export function computeMonthlyInsights(
   weeks: WeekBundle[],
   staff: Staff[],
+  options: InsightOptions = {},
 ): Insight[] {
+  const OVERTIME_HOURS = options.overtimeHours ?? DEFAULT_OVERTIME_HOURS;
   const out: Insight[] = [];
   const staffById = new Map(staff.map((s) => [s.id, s]));
 

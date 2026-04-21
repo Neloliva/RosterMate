@@ -83,6 +83,27 @@ export const ROLE_CATALOG: Record<BusinessType, RoleOption[]> = {
   ],
 };
 
+// Per-industry presets for the Business Settings modal. These are sensible
+// starting points — NOT sourced from live benchmark data. Users override as
+// needed.
+export const INDUSTRY_SETTINGS_DEFAULTS: Record<
+  BusinessType,
+  {
+    penaltyTargetPct: number;
+    overtimeHours: number;
+    defaultView: "week" | "month";
+  }
+> = {
+  cafe:          { penaltyTargetPct: 18, overtimeHours: 38, defaultView: "week" },
+  retail:        { penaltyTargetPct: 15, overtimeHours: 38, defaultView: "week" },
+  beauty:        { penaltyTargetPct: 12, overtimeHours: 38, defaultView: "week" },
+  medical:       { penaltyTargetPct: 10, overtimeHours: 40, defaultView: "month" },
+  aged_care:     { penaltyTargetPct: 20, overtimeHours: 38, defaultView: "month" },
+  manufacturing: { penaltyTargetPct: 15, overtimeHours: 38, defaultView: "month" },
+  fast_food:     { penaltyTargetPct: 18, overtimeHours: 38, defaultView: "week" },
+  cleaning:      { penaltyTargetPct: 15, overtimeHours: 38, defaultView: "week" },
+};
+
 export const STAFF_DEFAULTS: Record<
   BusinessType,
   { role: string; employmentType: EmploymentType; baseRate: number }

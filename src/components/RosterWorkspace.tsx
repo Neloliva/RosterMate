@@ -2,6 +2,7 @@
 
 import { useMemo, useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { BusinessSettingsModal } from "./BusinessSettingsModal";
 import { DashboardHeader } from "./DashboardHeader";
 import { KpiCards } from "./KpiCards";
 import { MonthlyRoster } from "./MonthlyRoster";
@@ -36,7 +37,7 @@ import {
 import { computeKpis } from "@/lib/kpis";
 import { computeStaffStats } from "@/lib/staff-stats";
 import { computeSuggestions, type Suggestion } from "@/lib/optimize";
-import type { Shift, Staff } from "@/lib/types";
+import type { BusinessSettings, Shift, Staff } from "@/lib/types";
 
 type OptimisticAction =
   | { kind: "upsert"; shift: Shift }
@@ -91,6 +92,7 @@ export function RosterWorkspace({
   shifts,
   shiftsByWeek,
   priorWeekStarts,
+  settings,
 }: {
   view: "week" | "month";
   weekStart: string;
@@ -98,6 +100,7 @@ export function RosterWorkspace({
   shifts: Shift[];
   shiftsByWeek: Record<string, Shift[]>;
   priorWeekStarts: string[];
+  settings: BusinessSettings;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -111,6 +114,7 @@ export function RosterWorkspace({
   const [optimizePreviewOpen, setOptimizePreviewOpen] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [reportOpen, setReportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [undoSnapshot, setUndoSnapshot] = useState<{
     weekStart: string;
     previous: Shift[];
@@ -141,6 +145,7 @@ export function RosterWorkspace({
     [optimisticShifts, staff, dismissed],
   );
   const totalSavings = suggestions.reduce((sum, s) => sum + s.savings, 0);
+  const overtimeOpts = { overtimeHours: settings.overtimeHours };
   const insights = useMemo(() => {
     if (view === "month") {
       const bundles = monthWeekStarts.map((ws) => ({
@@ -148,20 +153,41 @@ export function RosterWorkspace({
         shifts:
           ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []),
       }));
-      return computeMonthlyInsights(bundles, staff);
+      return computeMonthlyInsights(bundles, staff, overtimeOpts);
     }
-    return computeInsights(optimisticShifts, staff);
-  }, [view, monthWeekStarts, weekStart, optimisticShifts, shiftsByWeek, staff]);
+    return computeInsights(optimisticShifts, staff, overtimeOpts);
+  }, [
+    view,
+    monthWeekStarts,
+    weekStart,
+    optimisticShifts,
+    shiftsByWeek,
+    staff,
+    settings.overtimeHours,
+  ]);
 
   const staffStats = useMemo(() => {
     if (view === "month") {
       const all = monthWeekStarts.flatMap((ws) =>
         ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []),
       );
-      return computeStaffStats(staff, all, monthWeekStarts.length);
+      return computeStaffStats(
+        staff,
+        all,
+        monthWeekStarts.length,
+        overtimeOpts,
+      );
     }
-    return computeStaffStats(staff, optimisticShifts, 1);
-  }, [view, monthWeekStarts, weekStart, optimisticShifts, shiftsByWeek, staff]);
+    return computeStaffStats(staff, optimisticShifts, 1, overtimeOpts);
+  }, [
+    view,
+    monthWeekStarts,
+    weekStart,
+    optimisticShifts,
+    shiftsByWeek,
+    staff,
+    settings.overtimeHours,
+  ]);
   const staffScopeLabel = view === "month" ? "avg / wk" : "this week";
 
   const kpis = useMemo(() => {
@@ -418,6 +444,7 @@ export function RosterWorkspace({
         onPrev={() => navigateStep(-1)}
         onNext={() => navigateStep(1)}
         onToday={() => navigateTo(startOfWeek(new Date()))}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <KpiCards kpis={kpis} />
 
@@ -486,6 +513,12 @@ export function RosterWorkspace({
       <StaffEditor
         open={staffEditorOpen}
         onClose={() => setStaffEditorOpen(false)}
+        businessType={settings.businessType}
+      />
+      <BusinessSettingsModal
+        open={settingsOpen}
+        settings={settings}
+        onClose={() => setSettingsOpen(false)}
       />
       <SuggestionsModal
         open={suggestionsOpen}
@@ -526,6 +559,8 @@ export function RosterWorkspace({
           shiftsByWeek[addDays(weekStart, -7)] ?? []
         }
         suggestions={suggestions}
+        penaltyTargetPct={settings.penaltyTargetPct}
+        overtimeHours={settings.overtimeHours}
         onClose={() => setReportOpen(false)}
       />
     </div>

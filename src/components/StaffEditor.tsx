@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { addStaff } from "@/app/actions";
 import { initialsOf } from "@/lib/initials";
 import {
@@ -16,14 +16,21 @@ import { type EmploymentType } from "@/lib/types";
 
 const CUSTOM_ROLE_VALUE = "__custom__";
 
+function resolveBusinessType(value: string): BusinessType {
+  const match = BUSINESS_TYPES.find((b) => b.id === value);
+  return (match?.id ?? BUSINESS_TYPE) as BusinessType;
+}
+
 export function StaffEditor({
   open,
   onClose,
+  businessType: businessTypeProp,
 }: {
   open: boolean;
   onClose: () => void;
+  businessType: string;
 }) {
-  const [businessType, setBusinessType] = useState<BusinessType>(BUSINESS_TYPE);
+  const businessType = resolveBusinessType(businessTypeProp);
   const defaults = STAFF_DEFAULTS[businessType];
   const roleOptions = ROLE_CATALOG[businessType];
 
@@ -52,16 +59,16 @@ export function StaffEditor({
     [businessType],
   );
 
-  if (!open) return null;
-
-  function handleBusinessChange(id: BusinessType) {
-    const d = STAFF_DEFAULTS[id];
-    setBusinessType(id);
+  // When the business setting changes upstream, refresh the defaults
+  // (but only if the user hasn't already typed a custom name — preserve input).
+  useEffect(() => {
     setRoleMode("preset");
-    setSelectedRole(d.role);
-    setEmploymentType(d.employmentType);
-    setBaseRate(d.baseRate.toFixed(2));
-  }
+    setSelectedRole(defaults.role);
+    setEmploymentType(defaults.employmentType);
+    setBaseRate(defaults.baseRate.toFixed(2));
+  }, [businessType, defaults.role, defaults.employmentType, defaults.baseRate]);
+
+  if (!open) return null;
 
   function handleRoleChange(value: string) {
     if (value === CUSTOM_ROLE_VALUE) {
@@ -166,27 +173,15 @@ export function StaffEditor({
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-6">
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">
-              Industry template
+          <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Role catalog reflects the business industry:{" "}
+            <span className="font-semibold text-slate-800">
+              {selectedBusiness?.label ?? "Cafe / Restaurant"}
             </span>
-            <select
-              value={businessType}
-              onChange={(e) =>
-                handleBusinessChange(e.target.value as BusinessType)
-              }
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
-            >
-              {BUSINESS_TYPES.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-            <span className="mt-1 block text-xs text-slate-500">
-              Selects a starter role catalog and default employment type.
+            <span className="ml-1 text-slate-400">
+              · change in Business settings
             </span>
-          </label>
+          </div>
 
           <label className="block text-sm">
             <span className="mb-1 block font-medium text-slate-700">
