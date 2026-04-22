@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { addStaff } from "@/app/actions";
+import { addStaff, deleteStaff, updateStaff } from "@/app/actions";
 import { initialsOf } from "@/lib/initials";
 import {
   BUSINESS_TYPE,
@@ -12,7 +12,8 @@ import {
   STAFF_DEFAULTS,
   type BusinessType,
 } from "@/lib/mock-data";
-import { type EmploymentType } from "@/lib/types";
+import type { EmploymentType, Staff } from "@/lib/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 const CUSTOM_ROLE_VALUE = "__custom__";
 
@@ -25,14 +26,18 @@ export function StaffEditor({
   open,
   onClose,
   businessType: businessTypeProp,
+  editing,
 }: {
   open: boolean;
   onClose: () => void;
   businessType: string;
+  editing?: Staff | null;
 }) {
   const businessType = resolveBusinessType(businessTypeProp);
   const defaults = STAFF_DEFAULTS[businessType];
   const roleOptions = ROLE_CATALOG[businessType];
+  const mode: "create" | "edit" = editing ? "edit" : "create";
+  const editingId = editing?.id ?? null;
 
   const [name, setName] = useState("");
   const [roleMode, setRoleMode] = useState<"preset" | "custom">("preset");
@@ -51,6 +56,7 @@ export function StaffEditor({
     new Set(),
   );
   const [registrationNumber, setRegistrationNumber] = useState<string>("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -59,14 +65,61 @@ export function StaffEditor({
     [businessType],
   );
 
-  // When the business setting changes upstream, refresh the defaults
-  // (but only if the user hasn't already typed a custom name — preserve input).
+  // Pre-fill when opening in edit mode; reset when opening in create mode or
+  // when the business type changes.
   useEffect(() => {
-    setRoleMode("preset");
-    setSelectedRole(defaults.role);
-    setEmploymentType(defaults.employmentType);
-    setBaseRate(defaults.baseRate.toFixed(2));
-  }, [businessType, defaults.role, defaults.employmentType, defaults.baseRate]);
+    if (!open) return;
+    setError(null);
+    setConfirmDelete(false);
+    if (editing) {
+      setName(editing.name);
+      const hasPreset = roleOptions.some((r) => r.role === editing.role);
+      if (hasPreset) {
+        setRoleMode("preset");
+        setSelectedRole(editing.role);
+        setCustomRole("");
+      } else {
+        setRoleMode("custom");
+        setSelectedRole(defaults.role);
+        setCustomRole(editing.role);
+      }
+      setEmploymentType(editing.employmentType);
+      setBaseRate(editing.baseRate.toFixed(2));
+      setAge(editing.age != null ? String(editing.age) : "");
+      setIsJuniorOverride(
+        editing.isJunior != null ? Boolean(editing.isJunior) : null,
+      );
+      setQualifications(new Set(editing.qualifications ?? []));
+      setRegistrationNumber(editing.registrationNumber ?? "");
+      setAdvancedOpen(
+        Boolean(
+          editing.age ||
+            editing.isJunior ||
+            (editing.qualifications?.length ?? 0) > 0 ||
+            editing.registrationNumber,
+        ),
+      );
+    } else {
+      setName("");
+      setRoleMode("preset");
+      setSelectedRole(defaults.role);
+      setCustomRole("");
+      setEmploymentType(defaults.employmentType);
+      setBaseRate(defaults.baseRate.toFixed(2));
+      setAdvancedOpen(false);
+      setAge("");
+      setIsJuniorOverride(null);
+      setQualifications(new Set());
+      setRegistrationNumber("");
+    }
+  }, [
+    open,
+    editing,
+    defaults.role,
+    defaults.employmentType,
+    defaults.baseRate,
+    roleOptions,
+  ]);
 
   if (!open) return null;
 
@@ -120,21 +173,61 @@ export function StaffEditor({
     setError(null);
     startTransition(async () => {
       try {
-        await addStaff({
-          name: nameTrimmed,
-          role: roleName,
-          employmentType,
-          baseRate: rate,
-          businessType,
-          age: ageNum,
-          isJunior,
-          qualifications: [...qualifications],
-          registrationNumber: registrationNumber.trim() || null,
-        });
+        if (mode === "edit" && editingId) {
+          await updateStaff(editingId, {
+            name: nameTrimmed,
+            role: roleName,
+            employmentType,
+            baseRate: rate,
+            age: ageNum,
+            isJunior,
+            qualifications: [...qualifications],
+            registrationNumber: registrationNumber.trim() || null,
+          });
+        } else {
+          await addStaff({
+            name: nameTrimmed,
+            role: roleName,
+            employmentType,
+            baseRate: rate,
+            businessType,
+            age: ageNum,
+            isJunior,
+            qualifications: [...qualifications],
+            registrationNumber: registrationNumber.trim() || null,
+          });
+        }
         reset();
         onClose();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to add staff");
+        setError(
+          e instanceof Error
+            ? e.message
+            : mode === "edit"
+              ? "Failed to update staff"
+              : "Failed to add staff",
+        );
+      }
+    });
+  }
+
+  function handleDelete() {
+    if (!editingId) return;
+    setConfirmDelete(true);
+  }
+
+  function handleConfirmDelete() {
+    if (!editingId) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        await deleteStaff(editingId);
+        setConfirmDelete(false);
+        reset();
+        onClose();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to remove staff");
+        setConfirmDelete(false);
       }
     });
   }
@@ -152,7 +245,7 @@ export function StaffEditor({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-lg font-semibold text-slate-900">
-                Add staff member
+                {mode === "edit" ? "Edit staff member" : "Add staff member"}
               </h3>
               <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
                 {selectedBusiness?.label ?? "Preset"}
@@ -371,22 +464,56 @@ export function StaffEditor({
           {error && <p className="text-xs text-rose-500">{error}</p>}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 p-4">
-          <button
-            onClick={onClose}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={invalid || pending}
-            onClick={handleSave}
-            className="rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            {pending ? "Saving…" : "Add staff"}
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 p-4">
+          <div>
+            {mode === "edit" && (
+              <button
+                onClick={handleDelete}
+                disabled={pending}
+                className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Remove staff
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={invalid || pending}
+              onClick={handleSave}
+              className="rounded-lg bg-teal-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {pending
+                ? "Saving…"
+                : mode === "edit"
+                  ? "Save changes"
+                  : "Add staff"}
+            </button>
+          </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Remove ${editing?.name ?? "this staff member"}?`}
+        message={
+          <>
+            They&apos;ll no longer appear on rosters or reports. Their
+            historical shifts are kept in the database so past weeks stay
+            intact — the row is deactivated, not hard-deleted.
+          </>
+        }
+        confirmLabel="Remove staff"
+        destructive
+        pending={pending}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

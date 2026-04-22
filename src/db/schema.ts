@@ -20,6 +20,7 @@ export const staff = sqliteTable("staff", {
   isJunior: integer("is_junior", { mode: "boolean" }).default(false),
   qualifications: text("qualifications").default("[]"),
   registrationNumber: text("registration_number"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
 });
 
 export const shifts = sqliteTable(

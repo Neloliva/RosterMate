@@ -101,6 +101,7 @@ export default async function DashboardPage({
       isJunior: Boolean(r.isJunior),
       qualifications,
       registrationNumber: r.registrationNumber ?? null,
+      isActive: Boolean(r.isActive ?? true),
     };
   });
 

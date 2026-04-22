@@ -31,7 +31,7 @@ export function DashboardHeader({
           </h1>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-          <span aria-hidden>🛠</span>
+          <span aria-hidden>✅</span>
           <span>Built for Australian award compliance</span>
           <InfoTooltip label="Why RosterMate?" align="left">
             <p className="leading-snug">

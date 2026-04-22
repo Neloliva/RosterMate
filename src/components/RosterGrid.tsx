@@ -5,6 +5,7 @@ import { itemizeShiftCost, type PenaltyLevel } from "@/lib/award";
 import type { DayCell } from "@/lib/date";
 import { formatRange } from "@/lib/time";
 import type { Shift, Staff } from "@/lib/types";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 const levelStyles: Record<
   PenaltyLevel,
@@ -33,23 +34,32 @@ const levelStyles: Record<
 function ShiftCell({
   shift,
   level,
+  interactive = true,
   onClick,
   onDragStart,
 }: {
   shift: Shift;
   level: PenaltyLevel;
+  interactive?: boolean;
   onClick: (e: React.MouseEvent) => void;
   onDragStart: (e: React.DragEvent) => void;
 }) {
   const style = levelStyles[level];
+  const cursor = interactive
+    ? "cursor-grab active:cursor-grabbing"
+    : "cursor-default";
+  const hover = interactive ? style.hover : "";
+  const tip = interactive
+    ? style.label
+    : `${style.label} · removed staff (read-only)`;
   return (
     <button
       type="button"
-      draggable
+      draggable={interactive}
       onDragStart={onDragStart}
       onClick={onClick}
-      title={style.label}
-      className={`relative flex min-h-[56px] w-full cursor-grab flex-col items-center justify-center rounded-md px-2 py-1.5 text-center text-[11px] font-semibold text-white shadow-sm transition active:cursor-grabbing ${style.bg} ${style.hover}`}
+      title={tip}
+      className={`relative flex min-h-[56px] w-full ${cursor} flex-col items-center justify-center rounded-md px-2 py-1.5 text-center text-[11px] font-semibold text-white shadow-sm transition ${style.bg} ${hover}`}
     >
       <span
         className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full ${style.dot}`}
@@ -72,6 +82,7 @@ export function RosterGrid({
   onOpenCreate,
   onOpenEdit,
   onMoveShift,
+  onEditStaff,
 }: {
   days: DayCell[];
   staff: Staff[];
@@ -81,8 +92,15 @@ export function RosterGrid({
   onOpenCreate: (person: Staff, day: number) => void;
   onOpenEdit: (shift: Shift) => void;
   onMoveShift: (shiftId: string, toStaffId: string, toDay: number) => void;
+  onEditStaff?: (staffId: string) => void;
 }) {
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [pendingReplace, setPendingReplace] = useState<{
+    shiftId: string;
+    toStaff: Staff;
+    toDay: number;
+    existing: Shift;
+  } | null>(null);
 
   const shiftIndex = useMemo(() => {
     const map = new Map<string, Shift>();
@@ -94,6 +112,15 @@ export function RosterGrid({
     () => new Map(staff.map((s) => [s.id, s])),
     [staff],
   );
+
+  // Inactive staff only appear as rows if they have at least one shift in
+  // the visible scope (historical record). Active staff always appear.
+  const visibleStaff = useMemo(() => {
+    const staffIdsWithShifts = new Set(shifts.map((s) => s.staffId));
+    return staff.filter(
+      (s) => s.isActive !== false || staffIdsWithShifts.has(s.id),
+    );
+  }, [staff, shifts]);
   const levelByShiftId = useMemo(() => {
     const out = new Map<string, PenaltyLevel>();
     for (const s of shifts) {
@@ -162,69 +189,160 @@ export function RosterGrid({
             </tr>
           </thead>
           <tbody>
-            {staff.map((person) => (
-              <tr key={person.id}>
-                <td className="sticky left-0 z-10 border border-slate-200 bg-white px-4 py-3 align-middle">
-                  <div className="font-semibold text-slate-900">
-                    {person.name}
-                  </div>
-                  <div className="text-xs text-slate-500">{person.role}</div>
-                </td>
-                {days.map((_, dayIdx) => {
-                  const key = `${person.id}:${dayIdx}`;
-                  const shift = shiftIndex.get(key);
-                  const isDragTarget = dragOver === key;
-                  return (
-                    <td
-                      key={dayIdx}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = "move";
-                        if (dragOver !== key) setDragOver(key);
-                      }}
-                      onDragLeave={() => {
-                        if (dragOver === key) setDragOver(null);
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const shiftId = e.dataTransfer.getData("text/shift-id");
-                        if (shiftId) {
-                          onMoveShift(shiftId, person.id, dayIdx);
-                          setDragOver(null);
+            {visibleStaff.map((person) => {
+              const isInactive = person.isActive === false;
+              return (
+                <tr key={person.id} className={isInactive ? "opacity-60" : ""}>
+                  <td className="sticky left-0 z-10 border border-slate-200 bg-white px-0 py-0 align-middle">
+                    {onEditStaff && !isInactive ? (
+                      <button
+                        type="button"
+                        onClick={() => onEditStaff(person.id)}
+                        title={`Edit ${person.name}`}
+                        className="block w-full px-4 py-3 text-left transition hover:bg-slate-50"
+                      >
+                        <div className="font-semibold text-slate-900">
+                          {person.name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {person.role}
+                        </div>
+                      </button>
+                    ) : (
+                      <div
+                        className="px-4 py-3"
+                        title={
+                          isInactive
+                            ? "Removed staff — historical record, read-only"
+                            : undefined
                         }
-                      }}
-                      onClick={() => {
-                        if (!shift) onOpenCreate(person, dayIdx);
-                      }}
-                      className={`border border-slate-200 p-1.5 align-middle transition ${
-                        isDragTarget ? "bg-teal-50" : ""
-                      } ${shift ? "" : "cursor-pointer hover:bg-slate-50"}`}
-                    >
-                      {shift ? (
-                        <ShiftCell
-                          shift={shift}
-                          level={levelByShiftId.get(shift.id) ?? "standard"}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onOpenEdit(shift);
-                          }}
-                          onDragStart={(e) => {
-                            e.dataTransfer.setData(
-                              "text/shift-id",
-                              shift.id,
-                            );
-                            e.dataTransfer.effectAllowed = "move";
-                          }}
-                        />
-                      ) : null}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-900">
+                            {person.name}
+                          </span>
+                          {isInactive && (
+                            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-600">
+                              Removed
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {person.role}
+                        </div>
+                      </div>
+                    )}
+                  </td>
+                  {days.map((_, dayIdx) => {
+                    const key = `${person.id}:${dayIdx}`;
+                    const shift = shiftIndex.get(key);
+                    const isDragTarget = !isInactive && dragOver === key;
+                    return (
+                      <td
+                        key={dayIdx}
+                        onDragOver={(e) => {
+                          if (isInactive) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (dragOver !== key) setDragOver(key);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOver === key) setDragOver(null);
+                        }}
+                        onDrop={(e) => {
+                          if (isInactive) return;
+                          e.preventDefault();
+                          const shiftId =
+                            e.dataTransfer.getData("text/shift-id");
+                          if (!shiftId) return;
+                          setDragOver(null);
+                          const existing = shiftIndex.get(key);
+                          if (existing && existing.id !== shiftId) {
+                            setPendingReplace({
+                              shiftId,
+                              toStaff: person,
+                              toDay: dayIdx,
+                              existing,
+                            });
+                            return;
+                          }
+                          onMoveShift(shiftId, person.id, dayIdx);
+                        }}
+                        onClick={() => {
+                          if (isInactive) return;
+                          if (!shift) onOpenCreate(person, dayIdx);
+                        }}
+                        className={`border border-slate-200 p-1.5 align-middle transition ${
+                          isDragTarget ? "bg-teal-50" : ""
+                        } ${
+                          !shift && !isInactive
+                            ? "cursor-pointer hover:bg-slate-50"
+                            : ""
+                        }`}
+                      >
+                        {shift ? (
+                          <ShiftCell
+                            shift={shift}
+                            level={levelByShiftId.get(shift.id) ?? "standard"}
+                            interactive={!isInactive}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isInactive) onOpenEdit(shift);
+                            }}
+                            onDragStart={(e) => {
+                              if (isInactive) {
+                                e.preventDefault();
+                                return;
+                              }
+                              e.dataTransfer.setData(
+                                "text/shift-id",
+                                shift.id,
+                              );
+                              e.dataTransfer.effectAllowed = "move";
+                            }}
+                          />
+                        ) : null}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingReplace}
+        title="Replace existing shift?"
+        message={
+          pendingReplace ? (
+            <>
+              {pendingReplace.toStaff.name} already has a shift on{" "}
+              {days[pendingReplace.toDay]?.name ?? "this day"}{" "}
+              <span className="whitespace-nowrap">
+                ({formatRange(
+                  pendingReplace.existing.startHour,
+                  pendingReplace.existing.endHour,
+                )})
+              </span>
+              . Dropping here removes that shift.
+            </>
+          ) : null
+        }
+        confirmLabel="Replace shift"
+        destructive
+        onConfirm={() => {
+          if (!pendingReplace) return;
+          onMoveShift(
+            pendingReplace.shiftId,
+            pendingReplace.toStaff.id,
+            pendingReplace.toDay,
+          );
+          setPendingReplace(null);
+        }}
+        onCancel={() => setPendingReplace(null)}
+      />
     </div>
   );
 }

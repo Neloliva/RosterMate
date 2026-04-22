@@ -111,6 +111,7 @@ export function RosterWorkspace({
   );
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [staffEditorOpen, setStaffEditorOpen] = useState(false);
+  const [editingStaffId, setEditingStaffId] = useState<string | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [optimizePreviewOpen, setOptimizePreviewOpen] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
@@ -124,6 +125,18 @@ export function RosterWorkspace({
   const staffById = useMemo(
     () => new Map(staff.map((s) => [s.id, s])),
     [staff],
+  );
+  const activeStaff = useMemo(
+    () => staff.filter((s) => s.isActive !== false),
+    [staff],
+  );
+  const activeStaffIds = useMemo(
+    () => new Set(activeStaff.map((s) => s.id)),
+    [activeStaff],
+  );
+  const forwardShifts = useMemo(
+    () => optimisticShifts.filter((s) => activeStaffIds.has(s.staffId)),
+    [optimisticShifts, activeStaffIds],
   );
   const days = daysForWeek(weekStart);
   const MONTH_WEEKS = 4;
@@ -144,53 +157,62 @@ export function RosterWorkspace({
   }, [weekStart, monthWeekStarts, priorWeekStarts]);
   const suggestions = useMemo(
     () =>
-      computeSuggestions(optimisticShifts, staff).filter(
+      computeSuggestions(forwardShifts, activeStaff).filter(
         (s) => !dismissed.has(s.id),
       ),
-    [optimisticShifts, staff, dismissed],
+    [forwardShifts, activeStaff, dismissed],
   );
   const totalSavings = suggestions.reduce((sum, s) => sum + s.savings, 0);
   const overtimeOpts = { overtimeHours: settings.overtimeHours };
   const insights = useMemo(() => {
     if (view === "month") {
-      const bundles = monthWeekStarts.map((ws) => ({
-        weekStart: ws,
-        shifts:
-          ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []),
-      }));
-      return computeMonthlyInsights(bundles, staff, overtimeOpts);
+      const bundles = monthWeekStarts.map((ws) => {
+        const weekShifts =
+          ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []);
+        return {
+          weekStart: ws,
+          shifts: weekShifts.filter((s) => activeStaffIds.has(s.staffId)),
+        };
+      });
+      return computeMonthlyInsights(bundles, activeStaff, overtimeOpts);
     }
-    return computeInsights(optimisticShifts, staff, overtimeOpts);
+    return computeInsights(forwardShifts, activeStaff, overtimeOpts);
   }, [
     view,
     monthWeekStarts,
     weekStart,
     optimisticShifts,
     shiftsByWeek,
-    staff,
+    activeStaff,
+    activeStaffIds,
+    forwardShifts,
     settings.overtimeHours,
   ]);
 
   const staffStats = useMemo(() => {
     if (view === "month") {
-      const all = monthWeekStarts.flatMap((ws) =>
-        ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []),
-      );
+      const all = monthWeekStarts
+        .flatMap((ws) =>
+          ws === weekStart ? optimisticShifts : (shiftsByWeek[ws] ?? []),
+        )
+        .filter((s) => activeStaffIds.has(s.staffId));
       return computeStaffStats(
-        staff,
+        activeStaff,
         all,
         monthWeekStarts.length,
         overtimeOpts,
       );
     }
-    return computeStaffStats(staff, optimisticShifts, 1, overtimeOpts);
+    return computeStaffStats(activeStaff, forwardShifts, 1, overtimeOpts);
   }, [
     view,
     monthWeekStarts,
     weekStart,
     optimisticShifts,
     shiftsByWeek,
-    staff,
+    activeStaff,
+    activeStaffIds,
+    forwardShifts,
     settings.overtimeHours,
   ]);
   const staffScopeLabel = view === "month" ? "avg / wk" : "this week";
@@ -460,6 +482,10 @@ export function RosterWorkspace({
             staff={staff}
             shifts={optimisticShifts}
             holidays={holidays}
+            onEditStaff={(id) => {
+              setEditingStaffId(id);
+              setStaffEditorOpen(true);
+            }}
             banner={
               <SavingsBanner
                 totalSavings={totalSavings}
@@ -486,10 +512,20 @@ export function RosterWorkspace({
           />
         )}
         <aside className="space-y-5">
-          <StaffAvailability staff={staffStats} scopeLabel={staffScopeLabel} />
+          <StaffAvailability
+            staff={staffStats}
+            scopeLabel={staffScopeLabel}
+            onEditStaff={(id) => {
+              setEditingStaffId(id);
+              setStaffEditorOpen(true);
+            }}
+          />
           <QuickActions
             onAddShift={() => setEditor({ mode: "create" })}
-            onAddStaff={() => setStaffEditorOpen(true)}
+            onAddStaff={() => {
+              setEditingStaffId(null);
+              setStaffEditorOpen(true);
+            }}
             onCopyLastWeek={async () => {
               setUndoSnapshot(null);
               return copyLastWeek(weekStart);
@@ -512,7 +548,7 @@ export function RosterWorkspace({
       <ShiftEditor
         state={editor}
         days={days}
-        staffList={staff}
+        staffList={activeStaff}
         holidays={holidays}
         onClose={() => setEditor(null)}
         onSave={saveShift}
@@ -520,8 +556,16 @@ export function RosterWorkspace({
       />
       <StaffEditor
         open={staffEditorOpen}
-        onClose={() => setStaffEditorOpen(false)}
+        onClose={() => {
+          setStaffEditorOpen(false);
+          setEditingStaffId(null);
+        }}
         businessType={settings.businessType}
+        editing={
+          editingStaffId
+            ? (staff.find((s) => s.id === editingStaffId) ?? null)
+            : null
+        }
       />
       <BusinessSettingsModal
         open={settingsOpen}

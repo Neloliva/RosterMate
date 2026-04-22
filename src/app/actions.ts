@@ -142,19 +142,25 @@ export async function copyLastWeek(currentWeekStart: string): Promise<{
 }> {
   const lastWeekStart = addDays(currentWeekStart, -7);
 
-  const [lastWeekRows, currentWeekRows] = await Promise.all([
+  const [lastWeekRows, currentWeekRows, activeStaff] = await Promise.all([
     db.select().from(shifts).where(eq(shifts.weekStart, lastWeekStart)),
     db.select().from(shifts).where(eq(shifts.weekStart, currentWeekStart)),
+    db.select({ id: staff.id }).from(staff).where(eq(staff.isActive, true)),
   ]);
 
   if (lastWeekRows.length === 0) {
     return { copied: 0, available: 0 };
   }
 
+  const activeIds = new Set(activeStaff.map((s) => s.id));
+  // Don't resurrect shifts for staff who have since been removed.
+  const eligibleLastWeek = lastWeekRows.filter((s) =>
+    activeIds.has(s.staffId),
+  );
   const occupied = new Set(
     currentWeekRows.map((s) => `${s.staffId}:${s.day}`),
   );
-  const toInsert = lastWeekRows.filter(
+  const toInsert = eligibleLastWeek.filter(
     (s) => !occupied.has(`${s.staffId}:${s.day}`),
   );
 
@@ -173,7 +179,7 @@ export async function copyLastWeek(currentWeekStart: string): Promise<{
     revalidatePath("/");
   }
 
-  return { copied: toInsert.length, available: lastWeekRows.length };
+  return { copied: toInsert.length, available: eligibleLastWeek.length };
 }
 
 export async function addStaff(input: {
@@ -212,6 +218,101 @@ export async function addStaff(input: {
     registrationNumber: reg,
   });
 
+  revalidatePath("/");
+}
+
+export async function updateStaff(
+  id: string,
+  input: {
+    name: string;
+    role: string;
+    employmentType: EmploymentType;
+    baseRate: number;
+    age?: number | null;
+    isJunior?: boolean;
+    qualifications?: string[];
+    registrationNumber?: string | null;
+  },
+) {
+  const name = input.name.trim();
+  if (!name) throw new Error("Name is required");
+  if (!(input.baseRate > 0)) throw new Error("Base rate must be positive");
+
+  const existing = await db.select().from(staff).where(eq(staff.id, id));
+  if (existing.length === 0) throw new Error("Staff not found");
+
+  const prev = existing[0];
+  const quals = Array.isArray(input.qualifications)
+    ? input.qualifications.filter((q): q is string => typeof q === "string")
+    : [];
+  const reg = (input.registrationNumber ?? "").trim() || null;
+
+  await db
+    .update(staff)
+    .set({
+      name,
+      role: input.role.trim() || "Staff",
+      initials: initialsOf(name),
+      baseRate: input.baseRate,
+      employmentType: input.employmentType,
+      age: input.age ?? null,
+      isJunior: Boolean(input.isJunior),
+      qualifications: JSON.stringify(quals),
+      registrationNumber: reg,
+    })
+    .where(eq(staff.id, id));
+
+  // If pay-affecting fields changed, recompute cost on every shift this staff
+  // member owns (all weeks).
+  const payChanged =
+    prev.baseRate !== input.baseRate ||
+    prev.employmentType !== input.employmentType;
+  if (payChanged) {
+    const staffShifts = await db
+      .select()
+      .from(shifts)
+      .where(eq(shifts.staffId, id));
+    const staffForCalc = {
+      id,
+      name,
+      role: input.role.trim() || "Staff",
+      initials: initialsOf(name),
+      hoursThisWeek: prev.hoursThisWeek,
+      availability: prev.availability as never,
+      baseRate: input.baseRate,
+      employmentType: input.employmentType,
+    };
+    for (const s of staffShifts) {
+      const newCost = calculateShiftCost(
+        {
+          id: s.id,
+          staffId: s.staffId,
+          day: s.day,
+          startHour: s.startHour,
+          endHour: s.endHour,
+          cost: 0,
+        },
+        staffForCalc,
+      ).cost;
+      if (Math.abs(newCost - s.cost) >= 0.5) {
+        await db
+          .update(shifts)
+          .set({ cost: newCost })
+          .where(eq(shifts.id, s.id));
+      }
+    }
+  }
+
+  revalidatePath("/");
+}
+
+export async function deleteStaff(id: string) {
+  // Soft delete — preserves historical shift rows so past reports stay intact.
+  // Restore by setting is_active back to 1 manually or via a future UI.
+  await db
+    .update(staff)
+    .set({ isActive: false })
+    .where(eq(staff.id, id));
   revalidatePath("/");
 }
 
@@ -258,10 +359,11 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
   const sourceWeeks = targetWeeks.map((ws) => addDays(ws, -28));
   const allWeeks = [...sourceWeeks, ...targetWeeks];
 
-  const rows = await db
-    .select()
-    .from(shifts)
-    .where(inArray(shifts.weekStart, allWeeks));
+  const [rows, activeStaff] = await Promise.all([
+    db.select().from(shifts).where(inArray(shifts.weekStart, allWeeks)),
+    db.select({ id: staff.id }).from(staff).where(eq(staff.isActive, true)),
+  ]);
+  const activeIds = new Set(activeStaff.map((s) => s.id));
 
   const bySource = new Map<string, typeof rows>();
   const byTarget = new Map<string, typeof rows>();
@@ -284,7 +386,9 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
   }[] = [];
 
   for (let i = 0; i < targetWeeks.length; i++) {
-    const src = bySource.get(sourceWeeks[i]) ?? [];
+    const srcAll = bySource.get(sourceWeeks[i]) ?? [];
+    // Skip shifts whose staff has since been removed.
+    const src = srcAll.filter((s) => activeIds.has(s.staffId));
     const tgt = byTarget.get(targetWeeks[i]) ?? [];
     available += src.length;
     const occupied = new Set(tgt.map((s) => `${s.staffId}:${s.day}`));

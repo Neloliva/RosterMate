@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { itemizeShiftCost } from "@/lib/award";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { DayCell } from "@/lib/date";
 import {
   formatHour,
@@ -46,6 +47,7 @@ export function ShiftEditor({
   const [endTime, setEndTime] = useState("17:00");
   const [selectedStaffId, setSelectedStaffId] = useState("");
   const [selectedDay, setSelectedDay] = useState(0);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   useEffect(() => {
     if (!state) return;
@@ -265,7 +267,7 @@ export function ShiftEditor({
           <div>
             {editingMode && (
               <button
-                onClick={() => onDelete(state.shift.id)}
+                onClick={() => setConfirmDeleteOpen(true)}
                 className="rounded-lg border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-600 transition hover:bg-rose-50"
               >
                 Delete
@@ -298,6 +300,21 @@ export function ShiftEditor({
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen && editingMode}
+        title="Remove this shift?"
+        message="This shift will be removed from the roster. This can't be undone from the UI."
+        confirmLabel="Remove shift"
+        destructive
+        onConfirm={() => {
+          if (state.mode === "edit") {
+            onDelete(state.shift.id);
+          }
+          setConfirmDeleteOpen(false);
+        }}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

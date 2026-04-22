@@ -32,6 +32,7 @@ export type Staff = {
   isJunior?: boolean;
   qualifications?: string[];
   registrationNumber?: string | null;
+  isActive?: boolean;
 };
 
 export type Shift = {

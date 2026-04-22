@@ -110,6 +110,11 @@ function initDb() {
   if (!existing.has("registration_number")) {
     sqlite.exec("ALTER TABLE staff ADD COLUMN registration_number TEXT");
   }
+  if (!existing.has("is_active")) {
+    sqlite.exec(
+      "ALTER TABLE staff ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+    );
+  }
 
   // Seed staff on first run.
   const staffCount = sqlite
