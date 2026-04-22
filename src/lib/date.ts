@@ -71,7 +71,7 @@ export function formatWeekLabel(weekStartIso: string): string {
   return `Week of ${MONTHS[m - 1]} ${d}, ${y}`;
 }
 
-export type DayCell = { name: string; date: string };
+export type DayCell = { name: string; date: string; iso: string };
 
 export function daysForWeek(weekStartIso: string): DayCell[] {
   const [y, m, d] = weekStartIso.split("-").map(Number);
@@ -82,6 +82,7 @@ export function daysForWeek(weekStartIso: string): DayCell[] {
     return {
       name: DAY_NAMES[i],
       date: `${MONTHS_SHORT[day.getMonth()]} ${day.getDate()}`,
+      iso: toIsoDate(day),
     };
   });
 }

@@ -37,6 +37,7 @@ import {
 import { computeKpis } from "@/lib/kpis";
 import { computeStaffStats } from "@/lib/staff-stats";
 import { computeSuggestions, type Suggestion } from "@/lib/optimize";
+import { holidaysForWeekStarts } from "@/lib/public-holidays";
 import type { BusinessSettings, Shift, Staff } from "@/lib/types";
 
 type OptimisticAction =
@@ -137,6 +138,10 @@ export function RosterWorkspace({
     const lastWeek = daysForWeek(monthWeekStarts[MONTH_WEEKS - 1]);
     return `${firstWeek[0].date} – ${lastWeek[6].date}`;
   }, [view, weekStart, monthWeekStarts]);
+  const holidays = useMemo(() => {
+    const weeks = [weekStart, ...monthWeekStarts, ...priorWeekStarts];
+    return holidaysForWeekStarts(weeks);
+  }, [weekStart, monthWeekStarts, priorWeekStarts]);
   const suggestions = useMemo(
     () =>
       computeSuggestions(optimisticShifts, staff).filter(
@@ -454,6 +459,7 @@ export function RosterWorkspace({
             days={days}
             staff={staff}
             shifts={optimisticShifts}
+            holidays={holidays}
             banner={
               <SavingsBanner
                 totalSavings={totalSavings}
@@ -475,6 +481,7 @@ export function RosterWorkspace({
             weekStarts={monthWeekStarts}
             shiftsByWeek={shiftsByWeek}
             staff={staff}
+            holidays={holidays}
             onOpenWeek={(ws) => navigateTo(ws, "week")}
           />
         )}
@@ -506,6 +513,7 @@ export function RosterWorkspace({
         state={editor}
         days={days}
         staffList={staff}
+        holidays={holidays}
         onClose={() => setEditor(null)}
         onSave={saveShift}
         onDelete={deleteShift}

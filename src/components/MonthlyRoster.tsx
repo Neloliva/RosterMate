@@ -28,11 +28,13 @@ export function MonthlyRoster({
   weekStarts,
   shiftsByWeek,
   staff,
+  holidays,
   onOpenWeek,
 }: {
   weekStarts: string[];
   shiftsByWeek: Record<string, Shift[]>;
   staff: Staff[];
+  holidays?: Map<string, string>;
   onOpenWeek: (weekStart: string) => void;
 }) {
   const staffById = useMemo(
@@ -136,15 +138,29 @@ export function MonthlyRoster({
                     </div>
                   </button>
                 </td>
-                {row.byDay.map((shifts, dayIdx) => (
-                  <td
-                    key={dayIdx}
-                    onClick={() => onOpenWeek(row.weekStart)}
-                    className="cursor-pointer border border-slate-200 p-2 align-top transition hover:bg-slate-50"
-                  >
-                    <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                      {row.dayCells[dayIdx].date}
-                    </div>
+                {row.byDay.map((shifts, dayIdx) => {
+                  const dayIso = row.dayCells[dayIdx].iso;
+                  const holiday = holidays?.get(dayIso);
+                  return (
+                    <td
+                      key={dayIdx}
+                      onClick={() => onOpenWeek(row.weekStart)}
+                      className={`cursor-pointer border border-slate-200 p-2 align-top transition hover:bg-slate-50 ${holiday ? "bg-rose-50/60" : ""}`}
+                      title={holiday ? `${holiday} — public holiday` : undefined}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-1">
+                        <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                          {row.dayCells[dayIdx].date}
+                        </span>
+                        {holiday && (
+                          <span
+                            className="rounded-full bg-rose-100 px-1.5 py-0 text-[9px] font-semibold text-rose-700"
+                            title={holiday}
+                          >
+                            🎉
+                          </span>
+                        )}
+                      </div>
                     <div className="space-y-1">
                       {shifts.length === 0 && (
                         <div className="text-[11px] text-slate-300">—</div>
@@ -164,7 +180,8 @@ export function MonthlyRoster({
                       ))}
                     </div>
                   </td>
-                ))}
+                  );
+                })}
               </tr>
             ))}
           </tbody>

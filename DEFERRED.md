@@ -27,10 +27,14 @@ they depend on.
 - **Apprentice progression tables.** Years-of-service percentages exist in
   the demo role catalog (Hair/Beauty template) as hardcoded examples, but
   they're not wired into any automatic calculation.
-- **Public holidays.** The `shifts` table has no "is public holiday" flag and
-  the award engine has no `publicHoliday` branch. Public holiday loading in
-  `src/lib/award.ts` (`AwardRules.penalty.publicHoliday`) is defined but never
-  applied.
+- **Public holidays — partial.** National Australian holidays are now computed
+  (`src/lib/public-holidays.ts` — 7 per year including computed Easter) and
+  shown as badges in the weekly / monthly calendar headers and in the shift
+  editor. Still deferred: (a) the award engine does **not** yet auto-apply
+  the `publicHoliday` multiplier defined in `AwardRules.penalty.publicHoliday`
+  — costs for shifts on holidays do not change. (b) State-specific holidays
+  (Labour Day, King's Birthday, Melbourne Cup, show days, etc.) are NOT
+  included — they vary per jurisdiction and the app has no state setting.
 - **State-specific overlays.** RSA scope, food-safety requirements, and
   shift-differential rules vary per state (NSW / VIC / QLD / etc.). Nothing
   in the app is state-aware.

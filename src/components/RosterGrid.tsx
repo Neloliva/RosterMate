@@ -68,6 +68,7 @@ export function RosterGrid({
   staff,
   shifts,
   banner,
+  holidays,
   onOpenCreate,
   onOpenEdit,
   onMoveShift,
@@ -76,6 +77,7 @@ export function RosterGrid({
   staff: Staff[];
   shifts: Shift[];
   banner?: React.ReactNode;
+  holidays?: Map<string, string>;
   onOpenCreate: (person: Staff, day: number) => void;
   onOpenEdit: (shift: Shift) => void;
   onMoveShift: (shiftId: string, toStaffId: string, toDay: number) => void;
@@ -131,19 +133,32 @@ export function RosterGrid({
               <th className="sticky left-0 z-10 w-48 rounded-tl-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Staff
               </th>
-              {days.map((d, idx) => (
-                <th
-                  key={d.name}
-                  className={`border border-slate-200 bg-slate-50 px-3 py-2 text-center text-xs font-semibold text-slate-700 ${
-                    idx === days.length - 1 ? "rounded-tr-lg" : ""
-                  }`}
-                >
-                  <div>{d.name}</div>
-                  <div className="mt-0.5 text-[11px] font-normal text-slate-500">
-                    {d.date}
-                  </div>
-                </th>
-              ))}
+              {days.map((d, idx) => {
+                const holiday = holidays?.get(d.iso);
+                return (
+                  <th
+                    key={d.name}
+                    className={`border border-slate-200 bg-slate-50 px-3 py-2 text-center text-xs font-semibold text-slate-700 ${
+                      idx === days.length - 1 ? "rounded-tr-lg" : ""
+                    } ${holiday ? "bg-rose-50" : ""}`}
+                    title={holiday ? `${holiday} — public holiday` : undefined}
+                  >
+                    <div>{d.name}</div>
+                    <div className="mt-0.5 text-[11px] font-normal text-slate-500">
+                      {d.date}
+                    </div>
+                    {holiday && (
+                      <div
+                        className="mt-0.5 inline-flex max-w-full items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold normal-case tracking-wide text-rose-700"
+                        title={holiday}
+                      >
+                        <span aria-hidden>🎉</span>
+                        <span className="truncate">{holiday}</span>
+                      </div>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

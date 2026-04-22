@@ -23,6 +23,7 @@ export function ShiftEditor({
   state,
   days,
   staffList,
+  holidays,
   onClose,
   onSave,
   onDelete,
@@ -30,6 +31,7 @@ export function ShiftEditor({
   state: EditorState | null;
   days: DayCell[];
   staffList: Staff[];
+  holidays?: Map<string, string>;
   onClose: () => void;
   onSave: (input: {
     id?: string;
@@ -67,6 +69,10 @@ export function ShiftEditor({
   const resolvedStaff = staffList.find((s) => s.id === selectedStaffId);
   const invalidTimes = endHour <= startHour;
   const invalid = invalidTimes || !resolvedStaff;
+  const selectedDayIso = days[selectedDay]?.iso;
+  const holidayName = selectedDayIso
+    ? (holidays?.get(selectedDayIso) ?? null)
+    : null;
 
   const breakdown = useMemo(() => {
     if (!state || invalid || !resolvedStaff) return null;
@@ -106,6 +112,11 @@ export function ShiftEditor({
               {resolvedStaff ? resolvedStaff.name : "Select a staff member"}
               {days[day] ? ` — ${days[day].name}, ${days[day].date}` : ""}
             </p>
+            {holidayName && (
+              <p className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                🎉 {holidayName} — public holiday
+              </p>
+            )}
             {!invalid && (
               <p className="mt-0.5 text-xs font-medium text-teal-600">
                 {formatHour(startHour).toUpperCase()} –{" "}
@@ -240,6 +251,13 @@ export function ShiftEditor({
                 </span>
               </span>
             </div>
+            {holidayName && (
+              <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                ⚠️ Public holiday ({holidayName}): cost above does <strong>not</strong>{" "}
+                yet include the public-holiday multiplier — consult your award
+                for the correct rate.
+              </p>
+            )}
           </div>
         )}
 
