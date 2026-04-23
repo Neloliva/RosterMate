@@ -1,4 +1,4 @@
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { StaffPageClient } from "@/components/StaffPageClient";
 import { db } from "@/db/client";
@@ -37,17 +37,18 @@ export default async function StaffPortalPage({
   const firstWeek = weekStarts[0];
   const lastWeek = weekStarts[weekStarts.length - 1];
 
-  // Declined requests surface on the staff portal for a short window so the
-  // person sees why a day they asked off wasn't granted. 48h feels right:
-  // long enough for a weekend shift lifecycle, short enough to avoid clutter.
-  const declinedSince = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  // Resolved requests (approved + declined) surface on the staff portal for
+  // a short window: approved as a top-of-page acknowledgement, declined as
+  // both an acknowledgement and a persistent row chip with the reason. 48h
+  // is long enough for a weekend shift lifecycle, short enough to avoid clutter.
+  const resolvedSince = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
   const [
     allStaffRows,
     shiftRows,
     settingsRows,
     myPendingRows,
-    myDeclinedRows,
+    myResolvedRows,
   ] = await Promise.all([
     db
       .select({
@@ -87,11 +88,15 @@ export default async function StaffPortalPage({
       .where(
         and(
           eq(staffRequestsTable.staffId, me.id),
-          eq(staffRequestsTable.status, "declined"),
-          gte(staffRequestsTable.resolvedAt, declinedSince),
+          inArray(staffRequestsTable.status, ["approved", "declined"]),
+          gte(staffRequestsTable.resolvedAt, resolvedSince),
         ),
       ),
   ]);
+
+  const myDeclinedRows = myResolvedRows.filter(
+    (r) => r.status === "declined",
+  );
 
   const businessName = settingsRows[0]?.businessName ?? "Your Business";
   const contactPhone = settingsRows[0]?.contactPhone ?? null;
@@ -236,6 +241,82 @@ export default async function StaffPortalPage({
     }
   }
 
+  // Recent resolutions (approved + declined in the 48h window) power the
+  // dismissible "Recent updates" banner at the top of the portal. The client
+  // filters these against a localStorage "seen" set so each shows once.
+  const recentResolutions = myResolvedRows
+    .filter((r) => !!r.resolvedAt)
+    .map((r) => {
+      const dayIdx = r.day;
+      let resolvedWeekStart: string | null = r.weekStart;
+      let resolvedDay: number | null =
+        typeof dayIdx === "number" ? dayIdx : null;
+      // Swap requests carry a shiftId but not an explicit weekStart/day.
+      // Recover them from the shift so the banner can show the date.
+      if (r.type === "swap" && r.shiftId) {
+        const sh = shiftRowById.get(r.shiftId);
+        if (sh) {
+          resolvedWeekStart = sh.weekStart;
+          resolvedDay = sh.day;
+        }
+      }
+      return {
+        id: r.id,
+        type: r.type === "swap" ? ("swap" as const) : ("unavailable" as const),
+        status:
+          r.status === "approved" ? ("approved" as const) : ("declined" as const),
+        weekStart: resolvedWeekStart,
+        day: resolvedDay,
+        reason: r.resolutionNote ?? null,
+        resolvedAt: r.resolvedAt as string,
+      };
+    })
+    .sort((a, b) => (a.resolvedAt < b.resolvedAt ? 1 : -1));
+
+  // Combined "My requests" list (pending + recently-resolved in the same 48h
+  // window). Powers the glanceable status card at the top of the portal so
+  // staff don't have to scroll to the affected week to know where a request
+  // stands — relevant when they filed something 3 or 4 weeks out.
+  function normaliseRequest(r: (typeof myResolvedRows)[number]) {
+    let weekStart: string | null = r.weekStart;
+    let day: number | null = typeof r.day === "number" ? r.day : null;
+    if (r.type === "swap" && r.shiftId) {
+      const sh = shiftRowById.get(r.shiftId);
+      if (sh) {
+        weekStart = sh.weekStart;
+        day = sh.day;
+      }
+    }
+    return {
+      id: r.id,
+      type: r.type === "swap" ? ("swap" as const) : ("unavailable" as const),
+      status:
+        r.status === "approved"
+          ? ("approved" as const)
+          : r.status === "declined"
+            ? ("declined" as const)
+            : ("pending" as const),
+      weekStart,
+      day,
+      note: r.note ?? null,
+      reason: r.resolutionNote ?? null,
+      createdAt: r.createdAt,
+      resolvedAt: r.resolvedAt ?? null,
+    };
+  }
+
+  const myRequests = [
+    ...myPendingRows.map(normaliseRequest),
+    ...myResolvedRows.map(normaliseRequest),
+  ].sort((a, b) => {
+    // Pending first, then by most recent activity (resolvedAt or createdAt).
+    if (a.status === "pending" && b.status !== "pending") return -1;
+    if (b.status === "pending" && a.status !== "pending") return 1;
+    const aTs = a.resolvedAt ?? a.createdAt;
+    const bTs = b.resolvedAt ?? b.createdAt;
+    return aTs < bTs ? 1 : -1;
+  });
+
   const holidays = holidaysForWeekStarts(weekStarts);
   const daysByWeek: Record<string, ReturnType<typeof daysForWeek>> = {};
   for (const ws of weekStarts) daysByWeek[ws] = daysForWeek(ws);
@@ -274,6 +355,8 @@ export default async function StaffPortalPage({
         pendingSwapShiftIds={pendingSwapShiftIds}
         pendingUnavailableKeys={pendingUnavailableKeys}
         declinedByKey={declinedByKey}
+        recentResolutions={recentResolutions}
+        myRequests={myRequests}
         contactPhone={contactPhone}
         contactEmail={contactEmail}
         lastUpdatedAt={myLastUpdatedAt}

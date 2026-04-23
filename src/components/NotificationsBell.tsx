@@ -162,7 +162,7 @@ export function NotificationsBell({
           <div className="max-h-[min(70vh,600px)] overflow-y-auto">
             {count === 0 ? (
               <p className="p-6 text-center text-xs text-slate-500">
-                No pending swap or unavailability requests.
+                No pending swap or time-off requests.
               </p>
             ) : (
               <ul className="divide-y divide-slate-100">
@@ -228,7 +228,7 @@ export function NotificationsBell({
                 {"'s "}
                 {declineFor.type === "swap"
                   ? "swap request"
-                  : "unavailability"}{" "}
+                  : "time-off request"}{" "}
                 will be declined. They&apos;ll see a note on their schedule.
               </p>
               <label className="block">
@@ -280,7 +280,7 @@ function RequestItem({
   const header =
     req.type === "swap"
       ? `Swap — ${req.shiftLabel ?? "shift"}${dayLabel ? ` (${dayLabel})` : ""}`
-      : `Unavailable — ${dayLabel}${req.weekStart ? ` · week of ${req.weekStart}` : ""}`;
+      : `Time off — ${dayLabel}${req.weekStart ? ` · week of ${req.weekStart}` : ""}`;
 
   return (
     <li className="p-4 text-xs">

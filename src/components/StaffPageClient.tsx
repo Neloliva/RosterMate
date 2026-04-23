@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   submitSwapRequest,
   submitUnavailable,
@@ -26,6 +26,28 @@ type HeroSlot = {
   iso: string;
   mine: { id: string; startHour: number; endHour: number } | null;
   others: TeammateSlot[];
+};
+
+type RecentResolution = {
+  id: string;
+  type: "swap" | "unavailable";
+  status: "approved" | "declined";
+  weekStart: string | null;
+  day: number | null;
+  reason: string | null;
+  resolvedAt: string;
+};
+
+type MyRequest = {
+  id: string;
+  type: "swap" | "unavailable";
+  status: "pending" | "approved" | "declined";
+  weekStart: string | null;
+  day: number | null;
+  note: string | null;
+  reason: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
 };
 
 function formatDuration(startHour: number, endHour: number): string {
@@ -60,6 +82,8 @@ export function StaffPageClient({
   pendingSwapShiftIds,
   pendingUnavailableKeys,
   declinedByKey,
+  recentResolutions,
+  myRequests,
   contactPhone,
   contactEmail,
   lastUpdatedAt,
@@ -81,6 +105,8 @@ export function StaffPageClient({
     string,
     { type: "swap" | "unavailable"; reason: string | null; resolvedAt: string }
   >;
+  recentResolutions: RecentResolution[];
+  myRequests: MyRequest[];
   contactPhone: string | null;
   contactEmail: string | null;
   lastUpdatedAt: string | null;
@@ -96,6 +122,40 @@ export function StaffPageClient({
   const [actionPending, startActionTransition] = useTransition();
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [showFutureWeeks, setShowFutureWeeks] = useState(false);
+
+  // Per-token "seen" set for resolution banners. We wait until localStorage
+  // is hydrated before rendering banners to avoid a flash of already-seen
+  // notifications on first paint.
+  const seenStorageKey = `rostermate:staff:seen-resolutions:${token}`;
+  const [seenIds, setSeenIds] = useState<Set<string>>(new Set());
+  const [seenHydrated, setSeenHydrated] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(seenStorageKey);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        if (Array.isArray(arr)) setSeenIds(new Set(arr));
+      }
+    } catch {
+      // ignore malformed storage
+    }
+    setSeenHydrated(true);
+  }, [seenStorageKey]);
+
+  function dismissResolution(id: string) {
+    setSeenIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        // Cap to 200 most recent ids so localStorage doesn't grow forever.
+        const arr = [...next].slice(-200);
+        localStorage.setItem(seenStorageKey, JSON.stringify(arr));
+      } catch {
+        // ignore quota errors
+      }
+      return next;
+    });
+  }
 
   useVisiblePolling(15000);
 
@@ -153,10 +213,10 @@ export function StaffPageClient({
           day: cell.day,
           note,
         });
-        setActionStatus("Unavailable report sent to your manager.");
+        setActionStatus("Time off request sent to your manager.");
       } catch (e) {
         setActionStatus(
-          e instanceof Error ? e.message : "Couldn't submit report",
+          e instanceof Error ? e.message : "Couldn't submit request",
         );
       } finally {
         setUnavailableCell(null);
@@ -210,13 +270,24 @@ export function StaffPageClient({
             //   shift + today, in progress: can't work only
             //   shift + past: none
             //   no shift: none
+            // Also hide the matching button for 48h after the manager declined
+            // that same ask — avoids re-submission of a just-refused request.
+            // The other-type button stays available because it's a different
+            // thing to ask (swap is not the same as "can't work at all").
+            const recentlyDeclinedSwap = declined?.type === "swap";
+            const recentlyDeclinedUnavailable =
+              declined?.type === "unavailable";
             const canRequestSwap =
               !!shift &&
               !swapPending &&
+              !recentlyDeclinedSwap &&
               !isPast &&
               !(isToday && shiftStartedToday);
             const canReportUnavailable =
-              !!shift && !unavailablePending && !isPast;
+              !!shift &&
+              !unavailablePending &&
+              !recentlyDeclinedUnavailable &&
+              !isPast;
 
             const showActions = canRequestSwap || canReportUnavailable;
 
@@ -269,7 +340,7 @@ export function StaffPageClient({
                   )}
                   {unavailablePending && (
                     <span className="rounded-full bg-rose-200 px-2 py-0.5 text-[11px] font-semibold text-rose-800">
-                      Unavailable pending
+                      Time off pending
                     </span>
                   )}
                 </div>
@@ -317,8 +388,12 @@ export function StaffPageClient({
     const mine = slot.mine;
     const others = slot.others;
     const holiday = holidays.get(slot.iso);
+    const isToday = slot.iso === todayIso;
+    const wrapperClass = isToday
+      ? "rounded-xl border border-teal-200 bg-teal-50/60 p-4"
+      : "rounded-xl border border-slate-200 bg-white p-4";
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className={wrapperClass}>
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs font-bold uppercase tracking-wider text-teal-600">
             {label}
@@ -354,8 +429,19 @@ export function StaffPageClient({
     );
   }
 
+  const unseenResolutions = seenHydrated
+    ? recentResolutions.filter((r) => !seenIds.has(r.id))
+    : [];
+
   return (
     <div className="space-y-5">
+      {unseenResolutions.length > 0 && (
+        <RecentUpdates
+          updates={unseenResolutions}
+          daysByWeek={daysByWeek}
+          onDismiss={dismissResolution}
+        />
+      )}
       <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
         <div className="flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-full bg-teal-100 text-base font-semibold text-teal-700">
@@ -393,6 +479,8 @@ export function StaffPageClient({
         contactPhone={contactPhone}
         contactEmail={contactEmail}
       />
+
+      <MyRequestsCard requests={myRequests} daysByWeek={daysByWeek} />
 
       <section className="space-y-3">
         {renderHeroSlot("Today", today)}
@@ -470,7 +558,7 @@ export function StaffPageClient({
 
       <ConfirmDialog
         open={!!unavailableCell}
-        title="Report unavailable?"
+        title="Request time off?"
         message={
           <div className="space-y-3">
             {unavailableCell && (
@@ -500,7 +588,7 @@ export function StaffPageClient({
             </label>
           </div>
         }
-        confirmLabel="Send report"
+        confirmLabel="Send request"
         pending={actionPending}
         onConfirm={confirmUnavailable}
         onCancel={() => {
@@ -556,6 +644,262 @@ function QuickActionsRow({
         </a>
       )}
     </section>
+  );
+}
+
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffMs = Date.now() - then;
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  return `${days}d ago`;
+}
+
+function MyRequestsCard({
+  requests,
+  daysByWeek,
+}: {
+  requests: MyRequest[];
+  daysByWeek: Record<string, DayCell[]>;
+}) {
+  const pending = requests.filter((r) => r.status === "pending");
+  const resolved = requests.filter((r) => r.status !== "pending");
+  const hasPending = pending.length > 0;
+
+  // When there's anything pending, the section is expanded by default so the
+  // actionable items are glanceable. Resolved history collapses behind a
+  // "+N resolved" toggle inside the same card.
+  // When everything is resolved, the whole card collapses to a one-liner so
+  // it doesn't dominate the page.
+  const [showAllCaughtUp, setShowAllCaughtUp] = useState(false);
+  const [showResolvedInline, setShowResolvedInline] = useState(false);
+
+  if (requests.length === 0) return null;
+
+  const headerStatus = hasPending
+    ? `${pending.length} awaiting manager`
+    : `all caught up · ${resolved.length} resolved`;
+
+  // All-caught-up mode: header is the toggle; body hidden until clicked.
+  if (!hasPending) {
+    return (
+      <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <button
+          type="button"
+          onClick={() => setShowAllCaughtUp((o) => !o)}
+          aria-expanded={showAllCaughtUp}
+          className="flex w-full items-baseline justify-between gap-2 text-left"
+        >
+          <h2 className="text-base font-semibold text-slate-900">
+            My requests
+          </h2>
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500">
+            {headerStatus}
+            <span aria-hidden>{showAllCaughtUp ? "▴" : "▾"}</span>
+          </span>
+        </button>
+        {showAllCaughtUp && (
+          <ul className="mt-3 space-y-2">
+            {resolved.map((req) => (
+              <MyRequestRow
+                key={req.id}
+                req={req}
+                daysByWeek={daysByWeek}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
+  // Has-pending mode: pending always visible; resolved is an inline toggle.
+  return (
+    <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-base font-semibold text-slate-900">My requests</h2>
+        <span className="text-xs font-medium text-slate-500">
+          {headerStatus}
+        </span>
+      </div>
+      <ul className="mt-3 space-y-2">
+        {pending.map((req) => (
+          <MyRequestRow key={req.id} req={req} daysByWeek={daysByWeek} />
+        ))}
+      </ul>
+      {resolved.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowResolvedInline((o) => !o)}
+            aria-expanded={showResolvedInline}
+            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-700"
+          >
+            {showResolvedInline ? "Hide" : `Show ${resolved.length}`} resolved
+            <span aria-hidden>{showResolvedInline ? "▴" : "▾"}</span>
+          </button>
+          {showResolvedInline && (
+            <ul className="mt-2 space-y-2">
+              {resolved.map((req) => (
+                <MyRequestRow
+                  key={req.id}
+                  req={req}
+                  daysByWeek={daysByWeek}
+                />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function MyRequestRow({
+  req,
+  daysByWeek,
+}: {
+  req: MyRequest;
+  daysByWeek: Record<string, DayCell[]>;
+}) {
+  const typeLabel = req.type === "swap" ? "Swap" : "Time off";
+  const cell =
+    req.weekStart && typeof req.day === "number"
+      ? daysByWeek[req.weekStart]?.[req.day]
+      : null;
+  const dayPart = cell ? ` · ${cell.name}, ${cell.date}` : "";
+  const activityIso = req.resolvedAt ?? req.createdAt;
+  const activityLabel =
+    req.status === "pending"
+      ? `sent ${formatRelativeTime(req.createdAt)}`
+      : `${req.status} ${formatRelativeTime(activityIso)}`;
+
+  const chip =
+    req.status === "pending"
+      ? {
+          class: "bg-amber-100 text-amber-800",
+          icon: "●",
+          label: "Pending",
+        }
+      : req.status === "approved"
+        ? {
+            class: "bg-emerald-100 text-emerald-800",
+            icon: "✓",
+            label: "Approved",
+          }
+        : {
+            class: "bg-slate-200 text-slate-700",
+            icon: "✕",
+            label: "Declined",
+          };
+
+  return (
+    <li className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-medium text-slate-800">
+          {typeLabel}
+          <span className="text-slate-500">{dayPart}</span>
+        </div>
+        <span
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${chip.class}`}
+        >
+          <span aria-hidden>{chip.icon}</span>
+          {chip.label}
+        </span>
+      </div>
+      <div className="mt-1 text-xs text-slate-500">{activityLabel}</div>
+      {req.note && (
+        <div className="mt-1 text-xs italic text-slate-600">
+          Your note: “{req.note}”
+        </div>
+      )}
+      {req.status === "declined" && req.reason && (
+        <div className="mt-1 text-xs italic text-slate-700">
+          Manager: “{req.reason}”
+        </div>
+      )}
+    </li>
+  );
+}
+
+function RecentUpdates({
+  updates,
+  daysByWeek,
+  onDismiss,
+}: {
+  updates: RecentResolution[];
+  daysByWeek: Record<string, DayCell[]>;
+  onDismiss: (id: string) => void;
+}) {
+  return (
+    <section className="space-y-2" aria-label="Recent updates">
+      {updates.map((u) => (
+        <UpdateBanner
+          key={u.id}
+          update={u}
+          daysByWeek={daysByWeek}
+          onDismiss={() => onDismiss(u.id)}
+        />
+      ))}
+    </section>
+  );
+}
+
+function UpdateBanner({
+  update,
+  daysByWeek,
+  onDismiss,
+}: {
+  update: RecentResolution;
+  daysByWeek: Record<string, DayCell[]>;
+  onDismiss: () => void;
+}) {
+  const approved = update.status === "approved";
+  const typeLabel = update.type === "swap" ? "Swap" : "Time off";
+  const cell =
+    update.weekStart && typeof update.day === "number"
+      ? daysByWeek[update.weekStart]?.[update.day]
+      : null;
+  const dayPart = cell ? ` — ${cell.name}, ${cell.date}` : "";
+
+  const wrapperClass = approved
+    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+    : "border-slate-200 bg-slate-50 text-slate-800";
+  const iconChar = approved ? "✓" : "✕";
+
+  return (
+    <div
+      className={`flex items-start justify-between gap-3 rounded-xl border p-3 ${wrapperClass}`}
+      role="status"
+    >
+      <div className="flex-1 text-sm">
+        <div className="font-semibold">
+          <span className="mr-1" aria-hidden>
+            {iconChar}
+          </span>
+          {typeLabel} request {approved ? "approved" : "declined"}
+          {dayPart}
+        </div>
+        {update.reason && (
+          <div className="mt-0.5 text-xs italic opacity-80">
+            “{update.reason}”
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="rounded p-1 text-sm opacity-60 transition hover:opacity-100"
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 
