@@ -1,6 +1,8 @@
 "use client";
 
+import type { StaffRequest } from "@/lib/types";
 import { InfoTooltip } from "./InfoTooltip";
+import { NotificationsBell } from "./NotificationsBell";
 
 export function DashboardHeader({
   weekLabel,
@@ -10,6 +12,7 @@ export function DashboardHeader({
   onNext,
   onToday,
   onOpenSettings,
+  pendingRequests,
 }: {
   weekLabel: string;
   view: "week" | "month";
@@ -18,6 +21,7 @@ export function DashboardHeader({
   onNext: () => void;
   onToday: () => void;
   onOpenSettings: () => void;
+  pendingRequests: StaffRequest[];
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-100">
@@ -87,6 +91,7 @@ export function DashboardHeader({
         >
           Today
         </button>
+        <NotificationsBell requests={pendingRequests} />
         <button
           onClick={onOpenSettings}
           aria-label="Business settings"

@@ -1,6 +1,7 @@
 import { breakMinutes, calculateShiftCost } from "./award";
+import { computeDayCoverage } from "./coverage";
 import { computeSuggestions } from "./optimize";
-import type { Shift, Staff } from "./types";
+import type { CoverageRules, Shift, Staff } from "./types";
 
 export type InsightTone = "info" | "warning" | "success";
 
@@ -14,13 +15,25 @@ export type Insight = {
 const DEFAULT_OVERTIME_HOURS = 38;
 const PENALTY_CONCENTRATION_THRESHOLD = 0.2;
 
-export type InsightOptions = { overtimeHours?: number };
+export type InsightOptions = {
+  overtimeHours?: number;
+  coverageRules?: CoverageRules;
+};
 const WEEKDAY_NAMES = [
   "Monday",
   "Tuesday",
   "Wednesday",
   "Thursday",
   "Friday",
+];
+const ALL_DAY_NAMES = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
 ];
 
 function paidHoursOf(shift: Shift): number {
@@ -95,20 +108,53 @@ export function computeInsights(
     });
   }
 
-  // Coverage gap — any weekday with a single scheduled shift.
-  const shiftsPerDay = Array.from({ length: 7 }, () => 0);
-  for (const shift of shifts) shiftsPerDay[shift.day] += 1;
-  const thin: string[] = [];
-  for (let d = 0; d < 5; d++) {
-    if (shiftsPerDay[d] === 1) thin.push(WEEKDAY_NAMES[d]);
-  }
-  if (thin.length > 0) {
-    out.push({
-      id: "coverage",
-      title: "Thin coverage",
-      detail: `${thin.join(", ")} ${thin.length === 1 ? "has" : "have"} only one shift scheduled — consider adding support.`,
-      tone: "warning",
+  // Minimum-staffing breach — when the manager has set a coverage rule and
+  // a day this week is below it. Takes priority over the softer thin-coverage
+  // heuristic below because it reflects the manager's own declared minimum.
+  if (options.coverageRules) {
+    const perDay = computeDayCoverage({
+      shifts,
+      staff,
+      rules: options.coverageRules,
     });
+    const breaches = perDay.filter((d) => d.hasRule && !d.met);
+    if (breaches.length > 0) {
+      const labels = breaches.map((d) => {
+        const parts: string[] = [];
+        if (d.required !== null) {
+          parts.push(`${d.staffed}/${d.required} staff`);
+        }
+        if (d.roleRequired !== null && d.roleName) {
+          parts.push(`${d.roleStaffed}/${d.roleRequired} ${d.roleName}`);
+        }
+        return `${ALL_DAY_NAMES[d.day]} (${parts.join(", ")})`;
+      });
+      out.push({
+        id: "coverage-below-minimum",
+        title: "Below minimum coverage",
+        detail: `${labels.join("; ")} — below your configured minimum.`,
+        tone: "warning",
+      });
+    }
+  }
+
+  // Thin coverage (fallback heuristic) — any weekday with a single scheduled
+  // shift when no explicit minimum rule is set.
+  if (!options.coverageRules?.perDay.some((v) => v !== null)) {
+    const shiftsPerDay = Array.from({ length: 7 }, () => 0);
+    for (const shift of shifts) shiftsPerDay[shift.day] += 1;
+    const thin: string[] = [];
+    for (let d = 0; d < 5; d++) {
+      if (shiftsPerDay[d] === 1) thin.push(WEEKDAY_NAMES[d]);
+    }
+    if (thin.length > 0) {
+      out.push({
+        id: "coverage",
+        title: "Thin coverage",
+        detail: `${thin.join(", ")} ${thin.length === 1 ? "has" : "have"} only one shift scheduled — consider adding support.`,
+        tone: "warning",
+      });
+    }
   }
 
   if (out.length === 0) {

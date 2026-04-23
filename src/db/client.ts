@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { computeShiftCost } from "@/lib/cost";
 import { toIsoDate } from "@/lib/date";
 import { STAFF } from "@/lib/mock-data";
+import { randomToken } from "@/lib/tokens";
 import {
   SEED_RANGE_END,
   SEED_RANGE_START,
@@ -115,6 +116,84 @@ function initDb() {
       "ALTER TABLE staff ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
     );
   }
+  if (!existing.has("view_token")) {
+    sqlite.exec("ALTER TABLE staff ADD COLUMN view_token TEXT");
+  }
+  if (!existing.has("availability_preferences")) {
+    sqlite.exec(
+      "ALTER TABLE staff ADD COLUMN availability_preferences TEXT NOT NULL DEFAULT '{}'",
+    );
+  }
+
+  // business_settings: contact_phone + contact_email (nullable, optional).
+  const settingsCols = sqlite
+    .prepare("PRAGMA table_info(business_settings)")
+    .all() as { name: string }[];
+  const settingsExisting = new Set(settingsCols.map((c) => c.name));
+  if (!settingsExisting.has("contact_phone")) {
+    sqlite.exec("ALTER TABLE business_settings ADD COLUMN contact_phone TEXT");
+  }
+  if (!settingsExisting.has("contact_email")) {
+    sqlite.exec("ALTER TABLE business_settings ADD COLUMN contact_email TEXT");
+  }
+  if (!settingsExisting.has("coverage_rules")) {
+    sqlite.exec(
+      "ALTER TABLE business_settings ADD COLUMN coverage_rules TEXT",
+    );
+  }
+
+  // shifts: updated_at for the "last updated" indicator on the staff page.
+  const shiftCols = sqlite
+    .prepare("PRAGMA table_info(shifts)")
+    .all() as { name: string }[];
+  const shiftExisting = new Set(shiftCols.map((c) => c.name));
+  if (!shiftExisting.has("updated_at")) {
+    sqlite.exec("ALTER TABLE shifts ADD COLUMN updated_at TEXT");
+  }
+
+  // Staff requests table — swap / unavailable reports from the staff page.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS staff_requests (
+      id TEXT PRIMARY KEY,
+      staff_id TEXT NOT NULL REFERENCES staff(id),
+      type TEXT NOT NULL,
+      shift_id TEXT,
+      week_start TEXT,
+      day INTEGER,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+  `);
+
+  // staff_requests: resolution_note for the manager's reply when declining
+  // (optional) or approving. Added after initial release.
+  const requestCols = sqlite
+    .prepare("PRAGMA table_info(staff_requests)")
+    .all() as { name: string }[];
+  const requestExisting = new Set(requestCols.map((c) => c.name));
+  if (!requestExisting.has("resolution_note")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN resolution_note TEXT",
+    );
+  }
+
+  // Backfill view tokens for staff that pre-date the column.
+  const needTokens = sqlite
+    .prepare("SELECT id FROM staff WHERE view_token IS NULL OR view_token = ''")
+    .all() as { id: string }[];
+  if (needTokens.length > 0) {
+    const setToken = sqlite.prepare(
+      "UPDATE staff SET view_token = ? WHERE id = ?",
+    );
+    const tx = sqlite.transaction(() => {
+      for (const row of needTokens) {
+        setToken.run(randomToken(), row.id);
+      }
+    });
+    tx();
+  }
 
   // Seed staff on first run.
   const staffCount = sqlite
@@ -123,7 +202,7 @@ function initDb() {
 
   if (staffCount.c === 0) {
     const insertStaff = sqlite.prepare(
-      "INSERT INTO staff (id, name, role, initials, base_rate, employment_type, hours_this_week, availability) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO staff (id, name, role, initials, base_rate, employment_type, hours_this_week, availability, view_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
     const tx = sqlite.transaction(() => {
       for (const s of STAFF) {
@@ -136,6 +215,7 @@ function initDb() {
           s.employmentType,
           s.hoursThisWeek,
           s.availability,
+          randomToken(),
         );
       }
     });
@@ -150,9 +230,10 @@ function initDb() {
     "SELECT 1 FROM shifts WHERE week_start = ? LIMIT 1",
   );
   const insertShift = sqlite.prepare(
-    "INSERT INTO shifts (id, week_start, staff_id, day, start_hour, end_hour, cost) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO shifts (id, week_start, staff_id, day, start_hour, end_hour, cost, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   const staffById = new Map(STAFF.map((s) => [s.id, s]));
+  const seededAt = new Date().toISOString();
 
   const seedTx = sqlite.transaction(() => {
     for (let i = 0; i < weeks.length; i++) {
@@ -182,6 +263,7 @@ function initDb() {
           sh.startHour,
           sh.endHour,
           cost,
+          seededAt,
         );
       }
     }

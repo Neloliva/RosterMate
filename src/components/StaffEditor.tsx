@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { addStaff, deleteStaff, updateStaff } from "@/app/actions";
+import {
+  addStaff,
+  deleteStaff,
+  regenerateStaffToken,
+  updateStaff,
+} from "@/app/actions";
 import { initialsOf } from "@/lib/initials";
 import {
   BUSINESS_TYPE,
@@ -12,7 +17,13 @@ import {
   STAFF_DEFAULTS,
   type BusinessType,
 } from "@/lib/mock-data";
-import type { EmploymentType, Staff } from "@/lib/types";
+import { emptyStaffPreferences } from "@/lib/staff-preferences";
+import type {
+  EmploymentType,
+  ShiftPreference,
+  Staff,
+  StaffPreferences,
+} from "@/lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const CUSTOM_ROLE_VALUE = "__custom__";
@@ -56,6 +67,9 @@ export function StaffEditor({
     new Set(),
   );
   const [registrationNumber, setRegistrationNumber] = useState<string>("");
+  const [preferences, setPreferences] = useState<StaffPreferences>(
+    emptyStaffPreferences(),
+  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -91,6 +105,7 @@ export function StaffEditor({
       );
       setQualifications(new Set(editing.qualifications ?? []));
       setRegistrationNumber(editing.registrationNumber ?? "");
+      setPreferences(editing.preferences ?? emptyStaffPreferences());
       setAdvancedOpen(
         Boolean(
           editing.age ||
@@ -111,6 +126,7 @@ export function StaffEditor({
       setIsJuniorOverride(null);
       setQualifications(new Set());
       setRegistrationNumber("");
+      setPreferences(emptyStaffPreferences());
     }
   }, [
     open,
@@ -156,6 +172,7 @@ export function StaffEditor({
     setIsJuniorOverride(null);
     setQualifications(new Set());
     setRegistrationNumber("");
+    setPreferences(emptyStaffPreferences());
     setError(null);
   }
 
@@ -183,6 +200,7 @@ export function StaffEditor({
             isJunior,
             qualifications: [...qualifications],
             registrationNumber: registrationNumber.trim() || null,
+            preferences,
           });
         } else {
           await addStaff({
@@ -461,6 +479,19 @@ export function StaffEditor({
             )}
           </div>
 
+          <PreferencesBlock
+            value={preferences}
+            onChange={setPreferences}
+          />
+
+          {mode === "edit" && editing?.viewToken && (
+            <StaffShareLink
+              staffId={editingId!}
+              token={editing.viewToken}
+              name={editing.name}
+            />
+          )}
+
           {error && <p className="text-xs text-rose-500">{error}</p>}
         </div>
 
@@ -514,6 +545,256 @@ export function StaffEditor({
         onConfirm={handleConfirmDelete}
         onCancel={() => setConfirmDelete(false)}
       />
+    </div>
+  );
+}
+
+function StaffShareLink({
+  staffId,
+  token,
+  name,
+}: {
+  staffId: string;
+  token: string;
+  name: string;
+}) {
+  const [currentToken, setCurrentToken] = useState(token);
+  const [copied, setCopied] = useState(false);
+  const [rotating, startRotate] = useTransition();
+  const [confirmRotate, setConfirmRotate] = useState(false);
+
+  const url =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/staff/${currentToken}`
+      : `/staff/${currentToken}`;
+
+  function copy() {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  function rotate() {
+    startRotate(async () => {
+      try {
+        const next = await regenerateStaffToken(staffId);
+        setCurrentToken(next);
+        setConfirmRotate(false);
+      } catch {
+        setConfirmRotate(false);
+      }
+    });
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-xs font-semibold text-slate-800">
+            {name}&apos;s private schedule link
+          </div>
+          <div className="text-[10px] text-slate-500">
+            Share this URL — it lets them view their roster without a login.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setConfirmRotate(true)}
+          disabled={rotating}
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60"
+        >
+          {rotating ? "Rotating…" : "Rotate"}
+        </button>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          readOnly
+          value={url}
+          onFocus={(e) => e.currentTarget.select()}
+          className="flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={copy}
+          className="rounded-md bg-teal-500 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-teal-600"
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        open={confirmRotate}
+        title="Rotate this share link?"
+        message="The current link stops working immediately. Re-share the new URL with the staff member."
+        confirmLabel="Rotate link"
+        destructive
+        pending={rotating}
+        onConfirm={rotate}
+        onCancel={() => setConfirmRotate(false)}
+      />
+    </div>
+  );
+}
+
+const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const SHIFT_OPTIONS: { value: ShiftPreference; label: string }[] = [
+  { value: "morning", label: "Morning" },
+  { value: "evening", label: "Evening" },
+  { value: "any", label: "Any" },
+];
+
+function PreferencesBlock({
+  value,
+  onChange,
+}: {
+  value: StaffPreferences;
+  onChange: (next: StaffPreferences) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  function toggleDay(idx: number) {
+    const has = value.preferredDaysOff.includes(idx);
+    onChange({
+      ...value,
+      preferredDaysOff: has
+        ? value.preferredDaysOff.filter((d) => d !== idx)
+        : [...value.preferredDaysOff, idx].sort((a, b) => a - b),
+    });
+  }
+
+  function setShift(next: ShiftPreference) {
+    onChange({
+      ...value,
+      preferredShift: value.preferredShift === next ? "" : next,
+    });
+  }
+
+  const summaryParts: string[] = [];
+  if (value.agreedSchedule.trim()) summaryParts.push("agreed schedule");
+  if (value.preferredDaysOff.length > 0) {
+    summaryParts.push(
+      `off: ${value.preferredDaysOff
+        .map((d) => DAY_SHORT[d])
+        .join(", ")}`,
+    );
+  }
+  if (value.preferredShift) summaryParts.push(value.preferredShift);
+  if (value.notes.trim()) summaryParts.push("notes");
+  const summary =
+    summaryParts.length > 0 ? summaryParts.join(" · ") : "Not set";
+
+  return (
+    <div className="rounded-lg border border-slate-200">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+      >
+        <span className="flex items-center gap-2">
+          Preferences
+          <span className="text-xs font-normal text-slate-500">
+            · {summary}
+          </span>
+        </span>
+        <span aria-hidden className="text-xs text-slate-400">
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-slate-200 p-4">
+          <p className="text-[11px] text-slate-500">
+            Private to you — staff don&apos;t see these. Use them when planning
+            the roster.
+          </p>
+
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">
+              Agreed schedule
+            </span>
+            <input
+              type="text"
+              value={value.agreedSchedule}
+              onChange={(e) =>
+                onChange({ ...value, agreedSchedule: e.target.value })
+              }
+              placeholder="e.g. Mon–Wed mornings, 20h/wk"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            />
+            <span className="mt-1 block text-[11px] text-slate-500">
+              Whatever was agreed at hiring. Free text.
+            </span>
+          </label>
+
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">
+              Prefers day off
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {DAY_SHORT.map((name, idx) => {
+                const selected = value.preferredDaysOff.includes(idx);
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => toggleDay(idx)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                      selected
+                        ? "bg-teal-500 text-white shadow-sm hover:bg-teal-600"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">
+              Prefers shift
+            </span>
+            <div className="flex gap-1.5">
+              {SHIFT_OPTIONS.map((opt) => {
+                const selected = value.preferredShift === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setShift(opt.value)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                      selected
+                        ? "bg-teal-500 text-white shadow-sm hover:bg-teal-600"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">
+              Notes
+            </span>
+            <textarea
+              value={value.notes}
+              onChange={(e) => onChange({ ...value, notes: e.target.value })}
+              rows={2}
+              maxLength={500}
+              placeholder="e.g. studying Tue/Thu evenings, flexible around school pickup"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            />
+            <span className="mt-1 block text-[11px] text-slate-400">
+              {value.notes.length} / 500
+            </span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

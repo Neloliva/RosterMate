@@ -4,6 +4,8 @@ import { useMemo, useOptimistic, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BusinessSettingsModal } from "./BusinessSettingsModal";
 import { DashboardHeader } from "./DashboardHeader";
+import { computeDayCoverage } from "@/lib/coverage";
+import { CoverageBanner } from "./CoverageBanner";
 import { KpiCards } from "./KpiCards";
 import { MonthlyRoster } from "./MonthlyRoster";
 import { QuickActions } from "./QuickActions";
@@ -38,7 +40,13 @@ import { computeKpis } from "@/lib/kpis";
 import { computeStaffStats } from "@/lib/staff-stats";
 import { computeSuggestions, type Suggestion } from "@/lib/optimize";
 import { holidaysForWeekStarts } from "@/lib/public-holidays";
-import type { BusinessSettings, Shift, Staff } from "@/lib/types";
+import { useVisiblePolling } from "@/lib/use-visible-polling";
+import type {
+  BusinessSettings,
+  Shift,
+  Staff,
+  StaffRequest,
+} from "@/lib/types";
 
 type OptimisticAction =
   | { kind: "upsert"; shift: Shift }
@@ -94,6 +102,7 @@ export function RosterWorkspace({
   shiftsByWeek,
   priorWeekStarts,
   settings,
+  pendingRequests,
 }: {
   view: "week" | "month";
   weekStart: string;
@@ -102,6 +111,7 @@ export function RosterWorkspace({
   shiftsByWeek: Record<string, Shift[]>;
   priorWeekStarts: string[];
   settings: BusinessSettings;
+  pendingRequests: StaffRequest[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -121,6 +131,8 @@ export function RosterWorkspace({
     weekStart: string;
     previous: Shift[];
   } | null>(null);
+
+  useVisiblePolling(15000);
 
   const staffById = useMemo(
     () => new Map(staff.map((s) => [s.id, s])),
@@ -176,7 +188,10 @@ export function RosterWorkspace({
       });
       return computeMonthlyInsights(bundles, activeStaff, overtimeOpts);
     }
-    return computeInsights(forwardShifts, activeStaff, overtimeOpts);
+    return computeInsights(forwardShifts, activeStaff, {
+      ...overtimeOpts,
+      coverageRules: settings.coverageRules,
+    });
   }, [
     view,
     monthWeekStarts,
@@ -187,6 +202,7 @@ export function RosterWorkspace({
     activeStaffIds,
     forwardShifts,
     settings.overtimeHours,
+    settings.coverageRules,
   ]);
 
   const staffStats = useMemo(() => {
@@ -216,6 +232,22 @@ export function RosterWorkspace({
     settings.overtimeHours,
   ]);
   const staffScopeLabel = view === "month" ? "avg / wk" : "this week";
+
+  // Coverage for the visible week only — we don't aggregate across the
+  // 4-week month because the rule is per-weekday and month-view already
+  // renders 4 copies of each day. Showing the first week gives the manager
+  // a honest "this week's reality" snapshot.
+  const coverageScopeLabel =
+    view === "month" ? `week of ${weekStart}` : "this week";
+  const coverage = useMemo(
+    () =>
+      computeDayCoverage({
+        shifts: optimisticShifts.filter((s) => activeStaffIds.has(s.staffId)),
+        staff: activeStaff,
+        rules: settings.coverageRules,
+      }),
+    [optimisticShifts, activeStaff, activeStaffIds, settings.coverageRules],
+  );
 
   const kpis = useMemo(() => {
     const currentScope =
@@ -472,8 +504,10 @@ export function RosterWorkspace({
         onNext={() => navigateStep(1)}
         onToday={() => navigateTo(startOfWeek(new Date()))}
         onOpenSettings={() => setSettingsOpen(true)}
+        pendingRequests={pendingRequests}
       />
       <KpiCards kpis={kpis} />
+      <CoverageBanner coverage={coverage} scopeLabel={coverageScopeLabel} />
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
         {view === "week" ? (

@@ -21,6 +21,24 @@ export const staff = sqliteTable("staff", {
   qualifications: text("qualifications").default("[]"),
   registrationNumber: text("registration_number"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  viewToken: text("view_token"),
+  availabilityPreferences: text("availability_preferences").default("{}"),
+});
+
+export const staffRequests = sqliteTable("staff_requests", {
+  id: text("id").primaryKey(),
+  staffId: text("staff_id")
+    .notNull()
+    .references(() => staff.id),
+  type: text("type").notNull(), // "swap" | "unavailable"
+  shiftId: text("shift_id"),
+  weekStart: text("week_start"),
+  day: integer("day"),
+  note: text("note"),
+  status: text("status").notNull().default("pending"), // "pending" | "approved" | "declined"
+  createdAt: text("created_at").notNull(),
+  resolvedAt: text("resolved_at"),
+  resolutionNote: text("resolution_note"),
 });
 
 export const shifts = sqliteTable(
@@ -35,6 +53,7 @@ export const shifts = sqliteTable(
     startHour: real("start_hour").notNull(),
     endHour: real("end_hour").notNull(),
     cost: real("cost").notNull().default(0),
+    updatedAt: text("updated_at"),
   },
   (t) => ({
     cellUnique: uniqueIndex("shifts_cell_unique").on(
@@ -52,6 +71,9 @@ export const businessSettings = sqliteTable("business_settings", {
   penaltyTargetPct: real("penalty_target_pct").notNull(),
   overtimeHours: integer("overtime_hours").notNull(),
   defaultView: text("default_view").notNull(),
+  contactPhone: text("contact_phone"),
+  contactEmail: text("contact_email"),
+  coverageRules: text("coverage_rules"),
 });
 
 export type StaffRow = typeof staff.$inferSelect;

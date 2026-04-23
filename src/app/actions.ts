@@ -7,7 +7,16 @@ import { businessSettings, shifts, staff } from "@/db/schema";
 import { calculateShiftCost } from "@/lib/award";
 import { addDays } from "@/lib/date";
 import { initialsOf } from "@/lib/initials";
-import type { EmploymentType, Shift } from "@/lib/types";
+import { serializeCoverageRules } from "@/lib/coverage";
+import { serializeStaffPreferences } from "@/lib/staff-preferences";
+import { randomToken } from "@/lib/tokens";
+import type {
+  CoverageRules,
+  EmploymentType,
+  Shift,
+  StaffPreferences,
+} from "@/lib/types";
+import { staffRequests } from "@/db/schema";
 
 function newId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -69,6 +78,7 @@ export async function upsertShift(input: {
     .delete(shifts)
     .where(input.id ? and(cellConflict, ne(shifts.id, input.id)) : cellConflict);
 
+  const now = new Date().toISOString();
   if (input.id) {
     await db
       .update(shifts)
@@ -79,6 +89,7 @@ export async function upsertShift(input: {
         startHour: input.startHour,
         endHour: input.endHour,
         cost,
+        updatedAt: now,
       })
       .where(eq(shifts.id, input.id));
   } else {
@@ -90,6 +101,7 @@ export async function upsertShift(input: {
       startHour: input.startHour,
       endHour: input.endHour,
       cost,
+      updatedAt: now,
     });
   }
 
@@ -125,6 +137,7 @@ export async function moveShift(input: {
       staffId: input.toStaffId,
       day: input.toDay,
       cost,
+      updatedAt: new Date().toISOString(),
     })
     .where(eq(shifts.id, input.id));
 
@@ -165,6 +178,7 @@ export async function copyLastWeek(currentWeekStart: string): Promise<{
   );
 
   if (toInsert.length > 0) {
+    const now = new Date().toISOString();
     await db.insert(shifts).values(
       toInsert.map((s) => ({
         id: newId("sh"),
@@ -174,6 +188,7 @@ export async function copyLastWeek(currentWeekStart: string): Promise<{
         startHour: s.startHour,
         endHour: s.endHour,
         cost: s.cost,
+        updatedAt: now,
       })),
     );
     revalidatePath("/");
@@ -216,9 +231,82 @@ export async function addStaff(input: {
     isJunior: Boolean(input.isJunior),
     qualifications: JSON.stringify(quals),
     registrationNumber: reg,
+    viewToken: randomToken(),
   });
 
   revalidatePath("/");
+}
+
+export async function regenerateStaffToken(id: string): Promise<string> {
+  const token = randomToken();
+  await db
+    .update(staff)
+    .set({ viewToken: token })
+    .where(eq(staff.id, id));
+  revalidatePath("/");
+  return token;
+}
+
+async function loadPendingRequest(id: string) {
+  const rows = await db
+    .select()
+    .from(staffRequests)
+    .where(eq(staffRequests.id, id));
+  const row = rows[0];
+  if (!row) throw new Error("Request not found");
+  if (row.status !== "pending") {
+    throw new Error("Request already resolved");
+  }
+  return row;
+}
+
+async function revalidateForRequester(staffId: string) {
+  revalidatePath("/");
+  const rows = await db
+    .select({ token: staff.viewToken })
+    .from(staff)
+    .where(eq(staff.id, staffId));
+  const token = rows[0]?.token;
+  if (token) revalidatePath(`/staff/${token}`);
+}
+
+export async function approveStaffRequest(id: string) {
+  const req = await loadPendingRequest(id);
+
+  // For "unavailable" approvals, remove the at-risk shift. Swap approvals are
+  // acknowledgements only — the manager still has to reassign manually.
+  if (req.type === "unavailable" && req.weekStart && req.day !== null) {
+    await db
+      .delete(shifts)
+      .where(
+        and(
+          eq(shifts.weekStart, req.weekStart),
+          eq(shifts.staffId, req.staffId),
+          eq(shifts.day, req.day),
+        ),
+      );
+  }
+
+  await db
+    .update(staffRequests)
+    .set({ status: "approved", resolvedAt: new Date().toISOString() })
+    .where(eq(staffRequests.id, id));
+
+  await revalidateForRequester(req.staffId);
+}
+
+export async function declineStaffRequest(id: string, reason?: string) {
+  const req = await loadPendingRequest(id);
+  const trimmed = (reason ?? "").trim().slice(0, 500) || null;
+  await db
+    .update(staffRequests)
+    .set({
+      status: "declined",
+      resolvedAt: new Date().toISOString(),
+      resolutionNote: trimmed,
+    })
+    .where(eq(staffRequests.id, id));
+  await revalidateForRequester(req.staffId);
 }
 
 export async function updateStaff(
@@ -232,6 +320,7 @@ export async function updateStaff(
     isJunior?: boolean;
     qualifications?: string[];
     registrationNumber?: string | null;
+    preferences?: StaffPreferences;
   },
 ) {
   const name = input.name.trim();
@@ -247,19 +336,26 @@ export async function updateStaff(
     : [];
   const reg = (input.registrationNumber ?? "").trim() || null;
 
+  const patch: Record<string, unknown> = {
+    name,
+    role: input.role.trim() || "Staff",
+    initials: initialsOf(name),
+    baseRate: input.baseRate,
+    employmentType: input.employmentType,
+    age: input.age ?? null,
+    isJunior: Boolean(input.isJunior),
+    qualifications: JSON.stringify(quals),
+    registrationNumber: reg,
+  };
+  if (input.preferences) {
+    patch.availabilityPreferences = serializeStaffPreferences(
+      input.preferences,
+    );
+  }
+
   await db
     .update(staff)
-    .set({
-      name,
-      role: input.role.trim() || "Staff",
-      initials: initialsOf(name),
-      baseRate: input.baseRate,
-      employmentType: input.employmentType,
-      age: input.age ?? null,
-      isJunior: Boolean(input.isJunior),
-      qualifications: JSON.stringify(quals),
-      registrationNumber: reg,
-    })
+    .set(patch)
     .where(eq(staff.id, id));
 
   // If pay-affecting fields changed, recompute cost on every shift this staff
@@ -297,7 +393,7 @@ export async function updateStaff(
       if (Math.abs(newCost - s.cost) >= 0.5) {
         await db
           .update(shifts)
-          .set({ cost: newCost })
+          .set({ cost: newCost, updatedAt: new Date().toISOString() })
           .where(eq(shifts.id, s.id));
       }
     }
@@ -322,6 +418,9 @@ export async function updateBusinessSettings(input: {
   penaltyTargetPct: number;
   overtimeHours: number;
   defaultView: "week" | "month";
+  contactPhone?: string | null;
+  contactEmail?: string | null;
+  coverageRules?: CoverageRules;
 }) {
   const name = input.businessName.trim();
   if (!name) throw new Error("Business name is required");
@@ -335,15 +434,28 @@ export async function updateBusinessSettings(input: {
     throw new Error("Default view must be week or month");
   }
 
+  const phone = (input.contactPhone ?? "").trim() || null;
+  const email = (input.contactEmail ?? "").trim() || null;
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    throw new Error("Contact email doesn't look like a valid address");
+  }
+
+  const patch: Record<string, unknown> = {
+    businessName: name,
+    businessType: input.businessType,
+    penaltyTargetPct: input.penaltyTargetPct,
+    overtimeHours: input.overtimeHours,
+    defaultView: input.defaultView,
+    contactPhone: phone,
+    contactEmail: email,
+  };
+  if (input.coverageRules) {
+    patch.coverageRules = serializeCoverageRules(input.coverageRules);
+  }
+
   await db
     .update(businessSettings)
-    .set({
-      businessName: name,
-      businessType: input.businessType,
-      penaltyTargetPct: input.penaltyTargetPct,
-      overtimeHours: input.overtimeHours,
-      defaultView: input.defaultView,
-    })
+    .set(patch)
     .where(eq(businessSettings.id, "default"));
 
   revalidatePath("/");
@@ -383,7 +495,9 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
     startHour: number;
     endHour: number;
     cost: number;
+    updatedAt: string;
   }[] = [];
+  const now = new Date().toISOString();
 
   for (let i = 0; i < targetWeeks.length; i++) {
     const srcAll = bySource.get(sourceWeeks[i]) ?? [];
@@ -402,6 +516,7 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
           startHour: s.startHour,
           endHour: s.endHour,
           cost: s.cost,
+          updatedAt: now,
         });
       }
     }

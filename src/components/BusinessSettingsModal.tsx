@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { updateBusinessSettings } from "@/app/actions";
+import { emptyCoverageRules } from "@/lib/coverage";
 import {
   BUSINESS_TYPES,
   INDUSTRY_SETTINGS_DEFAULTS,
   type BusinessType,
 } from "@/lib/mock-data";
-import type { BusinessSettings } from "@/lib/types";
+import type { BusinessSettings, CoverageRules } from "@/lib/types";
 
 function resolveBusinessType(value: string): BusinessType {
   const match = BUSINESS_TYPES.find((b) => b.id === value);
@@ -32,6 +33,11 @@ export function BusinessSettingsModal({
   const [defaultView, setDefaultView] = useState<"week" | "month">(
     settings.defaultView,
   );
+  const [contactPhone, setContactPhone] = useState(settings.contactPhone ?? "");
+  const [contactEmail, setContactEmail] = useState(settings.contactEmail ?? "");
+  const [coverage, setCoverage] = useState<CoverageRules>(
+    settings.coverageRules ?? emptyCoverageRules(),
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -42,6 +48,9 @@ export function BusinessSettingsModal({
       setPenaltyTarget(settings.penaltyTargetPct.toString());
       setOvertime(settings.overtimeHours.toString());
       setDefaultView(settings.defaultView);
+      setContactPhone(settings.contactPhone ?? "");
+      setContactEmail(settings.contactEmail ?? "");
+      setCoverage(settings.coverageRules ?? emptyCoverageRules());
       setError(null);
     }
   }, [open, settings]);
@@ -80,6 +89,9 @@ export function BusinessSettingsModal({
           penaltyTargetPct: penaltyNum,
           overtimeHours: overtimeNum,
           defaultView,
+          contactPhone,
+          contactEmail,
+          coverageRules: coverage,
         });
         onClose();
       } catch (e) {
@@ -242,6 +254,44 @@ export function BusinessSettingsModal({
             </span>
           </div>
 
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">
+              Manager contact (optional)
+            </span>
+            <p className="mb-2 text-[11px] text-slate-500">
+              Shown on each staff&apos;s private schedule page. If set, staff
+              see Call / Email buttons to reach you directly.
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Phone
+                </span>
+                <input
+                  type="tel"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  placeholder="+61 …"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                />
+              </label>
+              <label className="text-sm">
+                <span className="mb-1 block text-xs font-medium text-slate-700">
+                  Email
+                </span>
+                <input
+                  type="email"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="manager@example.com"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                />
+              </label>
+            </div>
+          </div>
+
+          <CoverageRulesBlock value={coverage} onChange={setCoverage} />
+
           {error && <p className="text-xs text-rose-500">{error}</p>}
         </div>
 
@@ -261,6 +311,113 @@ export function BusinessSettingsModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+const COVERAGE_DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function CoverageRulesBlock({
+  value,
+  onChange,
+}: {
+  value: CoverageRules;
+  onChange: (next: CoverageRules) => void;
+}) {
+  function setDay(idx: number, raw: string) {
+    const parsed = raw === "" ? null : Number(raw);
+    const next =
+      parsed === null || !Number.isFinite(parsed) || parsed < 0
+        ? null
+        : Math.floor(parsed);
+    const perDay = [...value.perDay];
+    perDay[idx] = next;
+    onChange({ ...value, perDay });
+  }
+
+  function setRole(raw: string) {
+    const trimmed = raw.trim();
+    onChange({
+      ...value,
+      role: trimmed || null,
+      roleCount: trimmed ? value.roleCount ?? 1 : null,
+    });
+  }
+
+  function setRoleCount(raw: string) {
+    const parsed = raw === "" ? null : Number(raw);
+    const next =
+      parsed === null || !Number.isFinite(parsed) || parsed < 1
+        ? null
+        : Math.floor(parsed);
+    onChange({ ...value, roleCount: next });
+  }
+
+  const anyDaySet = value.perDay.some((v) => v !== null);
+
+  return (
+    <div>
+      <span className="mb-1 block text-sm font-medium text-slate-700">
+        Minimum staff coverage (optional)
+      </span>
+      <p className="mb-2 text-[11px] text-slate-500">
+        Set the lowest number of people you need on the floor each day. Blank
+        = no check. Used on the dashboard Coverage card and when approving
+        time-off requests.
+      </p>
+      <div className="grid grid-cols-7 gap-1.5">
+        {COVERAGE_DAY_LABELS.map((label, idx) => (
+          <label key={label} className="text-center text-[11px] text-slate-600">
+            <span className="mb-1 block font-medium">{label}</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={value.perDay[idx] ?? ""}
+              onChange={(e) => setDay(idx, e.target.value)}
+              placeholder="—"
+              className="w-full rounded-md border border-slate-200 px-1 py-1 text-center text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            />
+          </label>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <label className="col-span-2 text-sm">
+          <span className="mb-1 block text-xs font-medium text-slate-700">
+            Required role (optional)
+          </span>
+          <input
+            type="text"
+            value={value.role ?? ""}
+            onChange={(e) => setRole(e.target.value)}
+            placeholder="e.g. Supervisor"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs font-medium text-slate-700">
+            At least
+          </span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            disabled={!value.role}
+            value={value.roleCount ?? ""}
+            onChange={(e) => setRoleCount(e.target.value)}
+            placeholder="1"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100 disabled:bg-slate-50 disabled:text-slate-400"
+          />
+        </label>
+      </div>
+      <span className="mt-1 block text-[11px] text-slate-500">
+        {value.role
+          ? `At least ${value.roleCount ?? 1} ${value.role} must be rostered every day.`
+          : anyDaySet
+            ? "Role check is optional — leave blank to only track total headcount."
+            : "Leave blank to disable all coverage checks."}
+      </span>
     </div>
   );
 }
