@@ -25,6 +25,7 @@ export function ShiftEditor({
   days,
   staffList,
   holidays,
+  todayIso,
   onClose,
   onSave,
   onDelete,
@@ -33,6 +34,7 @@ export function ShiftEditor({
   days: DayCell[];
   staffList: Staff[];
   holidays?: Map<string, string>;
+  todayIso?: string;
   onClose: () => void;
   onSave: (input: {
     id?: string;
@@ -75,6 +77,9 @@ export function ShiftEditor({
   const holidayName = selectedDayIso
     ? (holidays?.get(selectedDayIso) ?? null)
     : null;
+  const isPastDay = Boolean(
+    selectedDayIso && todayIso && selectedDayIso < todayIso,
+  );
 
   const breakdown = useMemo(() => {
     if (!state || invalid || !resolvedStaff) return null;
@@ -135,6 +140,14 @@ export function ShiftEditor({
             ✕
           </button>
         </div>
+
+        {isPastDay && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <span className="font-semibold">⚠ This shift is in the past.</span>{" "}
+            Saving will change historical reports. Only edit if you&apos;re
+            correcting a mistake or recording what actually happened.
+          </div>
+        )}
 
         {!editingMode && (
           <div className="mt-5 grid grid-cols-2 gap-4">

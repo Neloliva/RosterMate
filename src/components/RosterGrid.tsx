@@ -79,6 +79,7 @@ export function RosterGrid({
   shifts,
   banner,
   holidays,
+  todayIso,
   onOpenCreate,
   onOpenEdit,
   onMoveShift,
@@ -89,6 +90,7 @@ export function RosterGrid({
   shifts: Shift[];
   banner?: React.ReactNode;
   holidays?: Map<string, string>;
+  todayIso: string;
   onOpenCreate: (person: Staff, day: number) => void;
   onOpenEdit: (shift: Shift) => void;
   onMoveShift: (shiftId: string, toStaffId: string, toDay: number) => void;
@@ -100,7 +102,18 @@ export function RosterGrid({
     toStaff: Staff;
     toDay: number;
     existing: Shift;
+    intoPast: boolean;
   } | null>(null);
+  const [pendingPastMove, setPendingPastMove] = useState<{
+    shiftId: string;
+    toStaff: Staff;
+    toDay: number;
+  } | null>(null);
+
+  const isPastDay = useMemo(
+    () => days.map((d) => d.iso < todayIso),
+    [days, todayIso],
+  );
 
   const shiftIndex = useMemo(() => {
     const map = new Map<string, Shift>();
@@ -162,13 +175,20 @@ export function RosterGrid({
               </th>
               {days.map((d, idx) => {
                 const holiday = holidays?.get(d.iso);
+                const past = isPastDay[idx];
                 return (
                   <th
                     key={d.name}
                     className={`border border-slate-200 bg-slate-50 px-3 py-2 text-center text-xs font-semibold text-slate-700 ${
                       idx === days.length - 1 ? "rounded-tr-lg" : ""
-                    } ${holiday ? "bg-rose-50" : ""}`}
-                    title={holiday ? `${holiday} — public holiday` : undefined}
+                    } ${holiday ? "bg-rose-50" : ""} ${past ? "opacity-60" : ""}`}
+                    title={
+                      past
+                        ? `${holiday ? holiday + " · " : ""}In the past — edits change historical reports`
+                        : holiday
+                          ? `${holiday} — public holiday`
+                          : undefined
+                    }
                   >
                     <div>{d.name}</div>
                     <div className="mt-0.5 text-[11px] font-normal text-slate-500">
@@ -237,6 +257,7 @@ export function RosterGrid({
                     const key = `${person.id}:${dayIdx}`;
                     const shift = shiftIndex.get(key);
                     const isDragTarget = !isInactive && dragOver === key;
+                    const past = isPastDay[dayIdx];
                     return (
                       <td
                         key={dayIdx}
@@ -263,6 +284,15 @@ export function RosterGrid({
                               toStaff: person,
                               toDay: dayIdx,
                               existing,
+                              intoPast: past,
+                            });
+                            return;
+                          }
+                          if (past) {
+                            setPendingPastMove({
+                              shiftId,
+                              toStaff: person,
+                              toDay: dayIdx,
                             });
                             return;
                           }
@@ -278,7 +308,7 @@ export function RosterGrid({
                           !shift && !isInactive
                             ? "cursor-pointer hover:bg-slate-50"
                             : ""
-                        }`}
+                        } ${past ? "opacity-60" : ""}`}
                       >
                         {shift ? (
                           <ShiftCell
@@ -314,20 +344,32 @@ export function RosterGrid({
 
       <ConfirmDialog
         open={!!pendingReplace}
-        title="Replace existing shift?"
+        title={
+          pendingReplace?.intoPast
+            ? "Replace past shift?"
+            : "Replace existing shift?"
+        }
         message={
           pendingReplace ? (
-            <>
-              {pendingReplace.toStaff.name} already has a shift on{" "}
-              {days[pendingReplace.toDay]?.name ?? "this day"}{" "}
-              <span className="whitespace-nowrap">
-                ({formatRange(
-                  pendingReplace.existing.startHour,
-                  pendingReplace.existing.endHour,
-                )})
-              </span>
-              . Dropping here removes that shift.
-            </>
+            <div className="space-y-2">
+              <p>
+                {pendingReplace.toStaff.name} already has a shift on{" "}
+                {days[pendingReplace.toDay]?.name ?? "this day"}{" "}
+                <span className="whitespace-nowrap">
+                  ({formatRange(
+                    pendingReplace.existing.startHour,
+                    pendingReplace.existing.endHour,
+                  )})
+                </span>
+                . Dropping here removes that shift.
+              </p>
+              {pendingReplace.intoPast && (
+                <p className="rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+                  ⚠ This day is in the past — the change will update historical
+                  reports.
+                </p>
+              )}
+            </div>
           ) : null
         }
         confirmLabel="Replace shift"
@@ -342,6 +384,32 @@ export function RosterGrid({
           setPendingReplace(null);
         }}
         onCancel={() => setPendingReplace(null)}
+      />
+
+      <ConfirmDialog
+        open={!!pendingPastMove}
+        title="Move shift to a past day?"
+        message={
+          pendingPastMove ? (
+            <p>
+              {pendingPastMove.toStaff.name}&apos;s shift will be moved to{" "}
+              {days[pendingPastMove.toDay]?.name ?? "that day"} (
+              {days[pendingPastMove.toDay]?.date}). This day is in the past —
+              the change will update historical reports.
+            </p>
+          ) : null
+        }
+        confirmLabel="Move to past day"
+        onConfirm={() => {
+          if (!pendingPastMove) return;
+          onMoveShift(
+            pendingPastMove.shiftId,
+            pendingPastMove.toStaff.id,
+            pendingPastMove.toDay,
+          );
+          setPendingPastMove(null);
+        }}
+        onCancel={() => setPendingPastMove(null)}
       />
     </div>
   );

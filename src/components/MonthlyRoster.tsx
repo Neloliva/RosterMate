@@ -29,12 +29,14 @@ export function MonthlyRoster({
   shiftsByWeek,
   staff,
   holidays,
+  todayIso,
   onOpenWeek,
 }: {
   weekStarts: string[];
   shiftsByWeek: Record<string, Shift[]>;
   staff: Staff[];
   holidays?: Map<string, string>;
+  todayIso?: string;
   onOpenWeek: (weekStart: string) => void;
 }) {
   const staffById = useMemo(
@@ -141,12 +143,19 @@ export function MonthlyRoster({
                 {row.byDay.map((shifts, dayIdx) => {
                   const dayIso = row.dayCells[dayIdx].iso;
                   const holiday = holidays?.get(dayIso);
+                  const past = Boolean(todayIso && dayIso < todayIso);
                   return (
                     <td
                       key={dayIdx}
                       onClick={() => onOpenWeek(row.weekStart)}
-                      className={`cursor-pointer border border-slate-200 p-2 align-top transition hover:bg-slate-50 ${holiday ? "bg-rose-50/60" : ""}`}
-                      title={holiday ? `${holiday} — public holiday` : undefined}
+                      className={`cursor-pointer border border-slate-200 p-2 align-top transition hover:bg-slate-50 ${holiday ? "bg-rose-50/60" : ""} ${past ? "opacity-60" : ""}`}
+                      title={
+                        past
+                          ? `${holiday ? holiday + " · " : ""}In the past`
+                          : holiday
+                            ? `${holiday} — public holiday`
+                            : undefined
+                      }
                     >
                       <div className="mb-1 flex items-center justify-between gap-1">
                         <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">

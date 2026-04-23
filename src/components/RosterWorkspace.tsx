@@ -134,6 +134,14 @@ export function RosterWorkspace({
 
   useVisiblePolling(15000);
 
+  // Calendar ISO for "today" from the client clock — used to dim past days
+  // and surface a "this is history" warning in the shift editor. Calendar-
+  // level comparison is safe client-side; we only need ISO date precision.
+  const todayIso = useMemo(
+    () => new Date().toISOString().slice(0, 10),
+    [],
+  );
+
   const staffById = useMemo(
     () => new Map(staff.map((s) => [s.id, s])),
     [staff],
@@ -516,6 +524,7 @@ export function RosterWorkspace({
             staff={staff}
             shifts={optimisticShifts}
             holidays={holidays}
+            todayIso={todayIso}
             onEditStaff={(id) => {
               setEditingStaffId(id);
               setStaffEditorOpen(true);
@@ -542,6 +551,7 @@ export function RosterWorkspace({
             shiftsByWeek={shiftsByWeek}
             staff={staff}
             holidays={holidays}
+            todayIso={todayIso}
             onOpenWeek={(ws) => navigateTo(ws, "week")}
           />
         )}
@@ -584,6 +594,7 @@ export function RosterWorkspace({
         days={days}
         staffList={activeStaff}
         holidays={holidays}
+        todayIso={todayIso}
         onClose={() => setEditor(null)}
         onSave={saveShift}
         onDelete={deleteShift}
