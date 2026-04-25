@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AlertTriangle, CheckCircle2, Circle } from "lucide-react";
 import type { DayCoverage } from "@/lib/coverage";
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -26,7 +27,12 @@ export function CoverageBanner({
     : none
       ? "bg-rose-50 text-rose-700 ring-rose-200"
       : "bg-amber-50 text-amber-800 ring-amber-200";
-  const dot = allMet ? "🟢" : none ? "🔴" : "🟡";
+  const StatusIcon = allMet ? CheckCircle2 : none ? AlertTriangle : Circle;
+  const statusIconClass = allMet
+    ? "text-emerald-600"
+    : none
+      ? "text-rose-600"
+      : "text-amber-600 fill-amber-500";
   const headline = allMet
     ? `All ${checked.length} checked day${checked.length === 1 ? "" : "s"} covered`
     : `${met}/${checked.length} day${checked.length === 1 ? "" : "s"} met`;
@@ -43,7 +49,10 @@ export function CoverageBanner({
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ${badgeClass}`}
           >
-            <span aria-hidden>{dot}</span>
+            <StatusIcon
+              aria-hidden
+              className={`h-3.5 w-3.5 ${statusIconClass}`}
+            />
             Coverage
           </span>
           <span className="text-sm font-medium text-slate-700">

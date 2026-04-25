@@ -90,9 +90,19 @@ export type BusinessSettings = {
   contactPhone?: string | null;
   contactEmail?: string | null;
   coverageRules: CoverageRules;
+  // Admin-curated dropdown options for time-off reason categorisation.
+  // Empty array = no dropdown shown, staff just gets the free-text note.
+  leaveReasonCategories: string[];
 };
 
 export type StaffRequestStatus = "pending" | "approved" | "declined";
+
+export type StaffRequestAttachmentSummary = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+};
 
 export type StaffRequestImpactPerson = {
   staffId: string;
@@ -132,14 +142,34 @@ export type StaffRequest = {
   id: string;
   staffId: string;
   staffName: string;
-  type: "swap" | "unavailable";
+  type: "swap" | "unavailable" | "time_change";
   shiftId?: string | null;
   shiftLabel?: string | null;
   weekStart?: string | null;
   day?: number | null;
   note?: string | null;
+  reasonCategory?: string | null;
+  // time_change: new hours staff is asking to work + the shift's current
+  // hours so the popover can render a "before → after" delta with hours
+  // and cost diff.
+  proposedStartHour?: number | null;
+  proposedEndHour?: number | null;
+  currentStartHour?: number | null;
+  currentEndHour?: number | null;
+  currentCost?: number | null;
+  proposedCost?: number | null;
+  // swap: name + id of the coworker they've pre-arranged with. The id
+  // travels client-side so the manager popover can pass it back to the
+  // approve action when moving the shift in one click.
+  proposedSwapWithStaffId?: string | null;
+  proposedSwapWithName?: string | null;
+  proposedSwapWithIsFreeThatDay?: boolean;
+  // Partner confirmation handshake state. "requested" = waiting on partner,
+  // "agreed" = partner confirmed, "declined" = partner rejected.
+  partnerConfirmationStatus?: "requested" | "agreed" | "declined" | null;
   createdAt: string;
   status?: StaffRequestStatus;
   resolvedAt?: string | null;
   impact?: StaffRequestImpact;
+  attachments?: StaffRequestAttachmentSummary[];
 };

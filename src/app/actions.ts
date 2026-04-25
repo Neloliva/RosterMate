@@ -1,13 +1,17 @@
 "use server";
 
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, ne } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { db } from "@/db/client";
-import { businessSettings, shifts, staff } from "@/db/schema";
+import { businessSettings, managerSessions, shifts, staff } from "@/db/schema";
 import { calculateShiftCost } from "@/lib/award";
+import { SESSION_COOKIE_NAME } from "@/lib/auth";
 import { addDays } from "@/lib/date";
 import { initialsOf } from "@/lib/initials";
 import { serializeCoverageRules } from "@/lib/coverage";
+import { serializeLeaveCategories } from "@/lib/leave-categories";
 import { serializeStaffPreferences } from "@/lib/staff-preferences";
 import { randomToken } from "@/lib/tokens";
 import type {
@@ -20,6 +24,46 @@ import { staffRequests } from "@/db/schema";
 
 function newId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Authoritative manager-session check for the dashboard server actions.
+// Middleware does a cheap cookie-presence check; this one does the real DB
+// lookup so forged cookies can't slip through. If no password has ever been
+// set we allow the request through — lets first-run seed / setup work before
+// the admin walks through /login.
+async function assertManagerSession(): Promise<void> {
+  const settingsRow = await db
+    .select({ hash: businessSettings.managerPasswordHash })
+    .from(businessSettings)
+    .where(eq(businessSettings.id, "default"));
+  const passwordSet = Boolean(settingsRow[0]?.hash);
+  if (!passwordSet) return;
+
+  const jar = await cookies();
+  const token = jar.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) {
+    // Middleware usually catches this on the page load; server actions
+    // called without a cookie end up here directly. Redirect rather than
+    // throw so the client flows cleanly back to the login screen.
+    redirect("/login");
+  }
+  const sessions = await db
+    .select()
+    .from(managerSessions)
+    .where(
+      and(
+        eq(managerSessions.token, token),
+        gte(managerSessions.expiresAt, new Date().toISOString()),
+      ),
+    );
+  if (sessions.length === 0) {
+    // The cookie points at a session row that no longer exists (expired,
+    // revoked on password rotation, or deleted). Clear the stale cookie
+    // and redirect, otherwise every subsequent action would hit the same
+    // dead-end.
+    jar.delete(SESSION_COOKIE_NAME);
+    redirect("/login");
+  }
 }
 
 async function loadStaff(staffId: string) {
@@ -65,6 +109,7 @@ export async function upsertShift(input: {
   startHour: number;
   endHour: number;
 }) {
+  await assertManagerSession();
   const person = await loadStaff(input.staffId);
   const cost = costFor(person, input.day, input.startHour, input.endHour);
 
@@ -114,6 +159,7 @@ export async function moveShift(input: {
   toStaffId: string;
   toDay: number;
 }) {
+  await assertManagerSession();
   const rows = await db.select().from(shifts).where(eq(shifts.id, input.id));
   if (rows.length === 0) return;
   const shift = rows[0];
@@ -145,6 +191,7 @@ export async function moveShift(input: {
 }
 
 export async function deleteShift(id: string) {
+  await assertManagerSession();
   await db.delete(shifts).where(eq(shifts.id, id));
   revalidatePath("/");
 }
@@ -153,6 +200,7 @@ export async function copyLastWeek(currentWeekStart: string): Promise<{
   copied: number;
   available: number;
 }> {
+  await assertManagerSession();
   const lastWeekStart = addDays(currentWeekStart, -7);
 
   const [lastWeekRows, currentWeekRows, activeStaff] = await Promise.all([
@@ -208,6 +256,7 @@ export async function addStaff(input: {
   qualifications?: string[];
   registrationNumber?: string | null;
 }) {
+  await assertManagerSession();
   const name = input.name.trim();
   if (!name) throw new Error("Name is required");
   if (!(input.baseRate > 0)) throw new Error("Base rate must be positive");
@@ -238,6 +287,7 @@ export async function addStaff(input: {
 }
 
 export async function regenerateStaffToken(id: string): Promise<string> {
+  await assertManagerSession();
   const token = randomToken();
   await db
     .update(staff)
@@ -270,11 +320,20 @@ async function revalidateForRequester(staffId: string) {
   if (token) revalidatePath(`/staff/${token}`);
 }
 
-export async function approveStaffRequest(id: string) {
+export async function approveStaffRequest(
+  id: string,
+  options?: { moveToStaffId?: string },
+) {
+  await assertManagerSession();
   const req = await loadPendingRequest(id);
 
-  // For "unavailable" approvals, remove the at-risk shift. Swap approvals are
-  // acknowledgements only — the manager still has to reassign manually.
+  // Per-type approval side effects:
+  //   unavailable  — remove the at-risk shift entirely
+  //   time_change  — edit the shift's hours to the proposed start/end
+  //                  (recompute cost against the owning staff's pay)
+  //   swap         — acknowledgement only by default; if moveToStaffId is
+  //                  supplied AND the partner has confirmed, also reassign
+  //                  the shift to them in the same approval step
   if (req.type === "unavailable" && req.weekStart && req.day !== null) {
     await db
       .delete(shifts)
@@ -285,6 +344,85 @@ export async function approveStaffRequest(id: string) {
           eq(shifts.day, req.day),
         ),
       );
+  } else if (
+    req.type === "time_change" &&
+    req.shiftId &&
+    typeof req.proposedStartHour === "number" &&
+    typeof req.proposedEndHour === "number"
+  ) {
+    const shiftRows = await db
+      .select()
+      .from(shifts)
+      .where(eq(shifts.id, req.shiftId));
+    const shiftRow = shiftRows[0];
+    if (shiftRow) {
+      const person = await loadStaff(shiftRow.staffId);
+      const newCost = costFor(
+        person,
+        shiftRow.day,
+        req.proposedStartHour,
+        req.proposedEndHour,
+      );
+      await db
+        .update(shifts)
+        .set({
+          startHour: req.proposedStartHour,
+          endHour: req.proposedEndHour,
+          cost: newCost,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(shifts.id, req.shiftId));
+    }
+  } else if (
+    req.type === "swap" &&
+    options?.moveToStaffId &&
+    req.shiftId
+  ) {
+    // Approve & reassign in one go. Guard rails: the partner must have
+    // confirmed in-system (so we're not moving the shift onto someone who
+    // never agreed) and the moveToStaffId must match the proposed partner.
+    if (req.partnerConfirmationStatus !== "agreed") {
+      throw new Error(
+        "Partner has not confirmed yet — can't auto-move the shift",
+      );
+    }
+    if (req.proposedSwapWithStaffId !== options.moveToStaffId) {
+      throw new Error("Move target doesn't match the proposed partner");
+    }
+    const shiftRows = await db
+      .select()
+      .from(shifts)
+      .where(eq(shifts.id, req.shiftId));
+    const shiftRow = shiftRows[0];
+    if (shiftRow) {
+      const target = await loadStaff(options.moveToStaffId);
+      const newCost = costFor(
+        target,
+        shiftRow.day,
+        shiftRow.startHour,
+        shiftRow.endHour,
+      );
+      // Clear any existing shift the target already had on that cell so we
+      // don't violate the (week_start, staff_id, day) unique index.
+      await db
+        .delete(shifts)
+        .where(
+          and(
+            eq(shifts.weekStart, shiftRow.weekStart),
+            eq(shifts.staffId, options.moveToStaffId),
+            eq(shifts.day, shiftRow.day),
+            ne(shifts.id, shiftRow.id),
+          ),
+        );
+      await db
+        .update(shifts)
+        .set({
+          staffId: options.moveToStaffId,
+          cost: newCost,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(shifts.id, shiftRow.id));
+    }
   }
 
   await db
@@ -293,9 +431,15 @@ export async function approveStaffRequest(id: string) {
     .where(eq(staffRequests.id, id));
 
   await revalidateForRequester(req.staffId);
+  // If the swap was moved to a partner, their portal also needs to refresh
+  // so the new shift appears immediately.
+  if (options?.moveToStaffId) {
+    await revalidateForRequester(options.moveToStaffId);
+  }
 }
 
 export async function declineStaffRequest(id: string, reason?: string) {
+  await assertManagerSession();
   const req = await loadPendingRequest(id);
   const trimmed = (reason ?? "").trim().slice(0, 500) || null;
   await db
@@ -323,6 +467,7 @@ export async function updateStaff(
     preferences?: StaffPreferences;
   },
 ) {
+  await assertManagerSession();
   const name = input.name.trim();
   if (!name) throw new Error("Name is required");
   if (!(input.baseRate > 0)) throw new Error("Base rate must be positive");
@@ -403,6 +548,7 @@ export async function updateStaff(
 }
 
 export async function deleteStaff(id: string) {
+  await assertManagerSession();
   // Soft delete — preserves historical shift rows so past reports stay intact.
   // Restore by setting is_active back to 1 manually or via a future UI.
   await db
@@ -421,7 +567,9 @@ export async function updateBusinessSettings(input: {
   contactPhone?: string | null;
   contactEmail?: string | null;
   coverageRules?: CoverageRules;
+  leaveReasonCategories?: string[];
 }) {
+  await assertManagerSession();
   const name = input.businessName.trim();
   if (!name) throw new Error("Business name is required");
   if (!(input.penaltyTargetPct >= 0 && input.penaltyTargetPct <= 100)) {
@@ -452,6 +600,11 @@ export async function updateBusinessSettings(input: {
   if (input.coverageRules) {
     patch.coverageRules = serializeCoverageRules(input.coverageRules);
   }
+  if (input.leaveReasonCategories !== undefined) {
+    patch.leaveReasonCategories = serializeLeaveCategories(
+      input.leaveReasonCategories,
+    );
+  }
 
   await db
     .update(businessSettings)
@@ -465,6 +618,7 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
   copied: number;
   available: number;
 }> {
+  await assertManagerSession();
   // Take the 4 weeks prior and map them onto the current week plus the next
   // three, in order. Same "fill empties only" rule as copyLastWeek.
   const targetWeeks = [0, 1, 2, 3].map((i) => addDays(currentWeekStart, i * 7));
@@ -533,6 +687,7 @@ export async function copyLastMonth(currentWeekStart: string): Promise<{
 export async function fetchRangeShifts(
   weekStarts: string[],
 ): Promise<Record<string, Shift[]>> {
+  await assertManagerSession();
   const out: Record<string, Shift[]> = {};
   for (const ws of weekStarts) out[ws] = [];
   if (weekStarts.length === 0) return out;

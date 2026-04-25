@@ -2,11 +2,31 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import {
+  AlertTriangle,
+  Check,
+  Circle,
+  Mail,
+  Paperclip,
+  Phone,
+  RefreshCw,
+  X,
+} from "lucide-react";
+import {
+  cancelStaffRequest,
+  confirmSwapAsPartner,
+  declineSwapAsPartner,
   submitSwapRequest,
   submitUnavailable,
+  updateStaffRequestNote,
+  uploadRequestAttachment,
 } from "@/app/staff/[token]/actions";
 import type { DayCell } from "@/lib/date";
-import { formatHour, formatRange } from "@/lib/time";
+import {
+  formatHour,
+  formatRange,
+  hourToTimeString,
+  timeStringToHour,
+} from "@/lib/time";
 import type { Shift, Staff } from "@/lib/types";
 import { useVisiblePolling } from "@/lib/use-visible-polling";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -30,7 +50,7 @@ type HeroSlot = {
 
 type RecentResolution = {
   id: string;
-  type: "swap" | "unavailable";
+  type: "swap" | "unavailable" | "time_change";
   status: "approved" | "declined";
   weekStart: string | null;
   day: number | null;
@@ -38,16 +58,40 @@ type RecentResolution = {
   resolvedAt: string;
 };
 
+type MyRequestAttachment = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
 type MyRequest = {
   id: string;
-  type: "swap" | "unavailable";
+  type: "swap" | "unavailable" | "time_change";
   status: "pending" | "approved" | "declined";
   weekStart: string | null;
   day: number | null;
   note: string | null;
+  reasonCategory: string | null;
+  proposedStartHour: number | null;
+  proposedEndHour: number | null;
+  proposedSwapWithName: string | null;
+  partnerConfirmationStatus: "requested" | "agreed" | "declined" | null;
   reason: string | null;
   createdAt: string;
   resolvedAt: string | null;
+  attachments: MyRequestAttachment[];
+};
+
+type PartnerAwaitingRequest = {
+  id: string;
+  requesterName: string;
+  weekStart: string;
+  day: number;
+  startHour: number;
+  endHour: number;
+  note: string | null;
+  createdAt: string;
 };
 
 function formatDuration(startHour: number, endHour: number): string {
@@ -84,6 +128,10 @@ export function StaffPageClient({
   declinedByKey,
   recentResolutions,
   myRequests,
+  leaveCategories,
+  coworkers,
+  busyStaffByKey,
+  partnerAwaiting,
   contactPhone,
   contactEmail,
   lastUpdatedAt,
@@ -103,22 +151,45 @@ export function StaffPageClient({
   pendingUnavailableKeys: string[];
   declinedByKey: Record<
     string,
-    { type: "swap" | "unavailable"; reason: string | null; resolvedAt: string }
+    {
+      type: "swap" | "unavailable" | "time_change";
+      reason: string | null;
+      resolvedAt: string;
+    }
   >;
   recentResolutions: RecentResolution[];
   myRequests: MyRequest[];
+  leaveCategories: string[];
+  coworkers: { id: string; firstName: string; role: string }[];
+  busyStaffByKey: Record<string, string[]>;
+  partnerAwaiting: PartnerAwaitingRequest[];
   contactPhone: string | null;
   contactEmail: string | null;
   lastUpdatedAt: string | null;
   nowHour: number;
 }) {
-  const [swapShift, setSwapShift] = useState<Shift | null>(null);
+  const [swapShift, setSwapShift] = useState<
+    { shift: Shift; weekStart: string } | null
+  >(null);
+  // Intent toggle inside the Request-swap dialog: staff can either ask for a
+  // time change (stay on shift, different hours) or for someone to cover it.
+  const [swapIntent, setSwapIntent] = useState<"time_change" | "cover">(
+    "time_change",
+  );
+  const [swapStart, setSwapStart] = useState("09:00");
+  const [swapEnd, setSwapEnd] = useState("17:00");
+  const [swapPartnerId, setSwapPartnerId] = useState<string>("");
   const [unavailableCell, setUnavailableCell] = useState<{
     weekStart: string;
     day: number;
   } | null>(null);
   const [swapNote, setSwapNote] = useState("");
   const [unavailableNote, setUnavailableNote] = useState("");
+  const [unavailableCategory, setUnavailableCategory] = useState<string>("");
+  const [unavailableFiles, setUnavailableFiles] = useState<File[]>([]);
+  const [unavailableFileError, setUnavailableFileError] = useState<string | null>(
+    null,
+  );
   const [actionPending, startActionTransition] = useTransition();
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const [showFutureWeeks, setShowFutureWeeks] = useState(false);
@@ -178,18 +249,43 @@ export function StaffPageClient({
 
   function confirmSwap() {
     if (!swapShift) return;
-    const shift = swapShift;
+    const { shift } = swapShift;
     const note = swapNote;
+    const intent = swapIntent;
+    // Capture form state so it persists through the async boundary
+    const startStr = swapStart;
+    const endStr = swapEnd;
+    const partnerId = swapPartnerId;
     startActionTransition(async () => {
       try {
-        await submitSwapRequest({
-          token,
-          shiftId: shift.id,
-          note,
-        });
-        setActionStatus(
-          "Swap request sent. Your manager will see it in the dashboard.",
-        );
+        if (intent === "time_change") {
+          const startHour = timeStringToHour(startStr);
+          const endHourRaw = timeStringToHour(endStr);
+          const endHour = endHourRaw <= startHour ? endHourRaw + 24 : endHourRaw;
+          if (endHour <= startHour) {
+            throw new Error("End time must be after start time");
+          }
+          await submitSwapRequest({
+            token,
+            shiftId: shift.id,
+            note,
+            proposedStartHour: startHour,
+            proposedEndHour: endHour,
+          });
+          setActionStatus(
+            "Time change request sent. Your manager will see it in the dashboard.",
+          );
+        } else {
+          await submitSwapRequest({
+            token,
+            shiftId: shift.id,
+            note,
+            proposedSwapWithStaffId: partnerId || null,
+          });
+          setActionStatus(
+            "Swap request sent. Your manager will see it in the dashboard.",
+          );
+        }
       } catch (e) {
         setActionStatus(
           e instanceof Error ? e.message : "Couldn't submit request",
@@ -197,6 +293,10 @@ export function StaffPageClient({
       } finally {
         setSwapShift(null);
         setSwapNote("");
+        setSwapIntent("time_change");
+        setSwapStart("09:00");
+        setSwapEnd("17:00");
+        setSwapPartnerId("");
       }
     });
   }
@@ -205,15 +305,48 @@ export function StaffPageClient({
     if (!unavailableCell) return;
     const cell = unavailableCell;
     const note = unavailableNote;
+    const reasonCategory = unavailableCategory || null;
+    const filesToUpload = unavailableFiles;
     startActionTransition(async () => {
       try {
-        await submitUnavailable({
+        const { id: requestId } = await submitUnavailable({
           token,
           weekStart: cell.weekStart,
           day: cell.day,
           note,
+          reasonCategory,
         });
-        setActionStatus("Time off request sent to your manager.");
+
+        // Chain each attachment upload sequentially against the new request
+        // id. Failures don't block the success toast — the request is
+        // already saved — but we surface which files didn't land.
+        const failed: string[] = [];
+        for (const file of filesToUpload) {
+          const fd = new FormData();
+          fd.append("token", token);
+          fd.append("requestId", requestId);
+          fd.append("file", file);
+          try {
+            const res = await uploadRequestAttachment(fd);
+            if (!res.ok) failed.push(`${file.name} (${res.error})`);
+          } catch (err) {
+            failed.push(
+              `${file.name} (${err instanceof Error ? err.message : "upload failed"})`,
+            );
+          }
+        }
+
+        if (failed.length === 0) {
+          setActionStatus(
+            filesToUpload.length > 0
+              ? `Time off request sent with ${filesToUpload.length} attachment${filesToUpload.length === 1 ? "" : "s"}.`
+              : "Time off request sent to your manager.",
+          );
+        } else {
+          setActionStatus(
+            `Request saved, but couldn't upload: ${failed.join(", ")}. Cancel and resubmit if those files are important.`,
+          );
+        }
       } catch (e) {
         setActionStatus(
           e instanceof Error ? e.message : "Couldn't submit request",
@@ -221,6 +354,9 @@ export function StaffPageClient({
       } finally {
         setUnavailableCell(null);
         setUnavailableNote("");
+        setUnavailableCategory("");
+        setUnavailableFiles([]);
+        setUnavailableFileError(null);
       }
     });
   }
@@ -349,10 +485,29 @@ export function StaffPageClient({
                     {canRequestSwap && (
                       <button
                         type="button"
-                        onClick={() => setSwapShift(shift!)}
+                        onClick={() => {
+                          // Pre-fill the time pickers with the current
+                          // rostered hours so the most common "small tweak"
+                          // path is one-step.
+                          setSwapStart(hourToTimeString(shift!.startHour));
+                          setSwapEnd(
+                            hourToTimeString(
+                              shift!.endHour > 24
+                                ? shift!.endHour - 24
+                                : shift!.endHour,
+                            ),
+                          );
+                          setSwapIntent("time_change");
+                          setSwapPartnerId("");
+                          setSwapShift({ shift: shift!, weekStart: ws });
+                        }}
                         className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
-                        🔄 Request swap
+                        <RefreshCw
+                          aria-hidden
+                          className="h-4 w-4 text-teal-600"
+                        />
+                        Request swap
                       </button>
                     )}
                     {canReportUnavailable && (
@@ -366,7 +521,11 @@ export function StaffPageClient({
                         }
                         className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                       >
-                        ⚠️ Can&apos;t work
+                        <AlertTriangle
+                          aria-hidden
+                          className="h-4 w-4 text-amber-600"
+                        />
+                        Can&apos;t work
                       </button>
                     )}
                   </div>
@@ -480,7 +639,20 @@ export function StaffPageClient({
         contactEmail={contactEmail}
       />
 
-      <MyRequestsCard requests={myRequests} daysByWeek={daysByWeek} />
+      {partnerAwaiting.length > 0 && (
+        <PartnerAwaitingCard
+          items={partnerAwaiting}
+          daysByWeek={daysByWeek}
+          token={token}
+        />
+      )}
+
+      <MyRequestsCard
+        requests={myRequests}
+        daysByWeek={daysByWeek}
+        token={token}
+        leaveCategories={leaveCategories}
+      />
 
       <section className="space-y-3">
         {renderHeroSlot("Today", today)}
@@ -521,31 +693,26 @@ export function StaffPageClient({
 
       <ConfirmDialog
         open={!!swapShift}
-        title="Request a shift swap?"
+        title="Request a shift change?"
         message={
-          <div className="space-y-3">
-            {swapShift && (
-              <div className="text-sm text-slate-600">
-                Shift:{" "}
-                <span className="font-semibold text-slate-800">
-                  {formatRange(swapShift.startHour, swapShift.endHour)}
-                </span>
-              </div>
-            )}
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">
-                Optional note for your manager
-              </span>
-              <textarea
-                value={swapNote}
-                onChange={(e) => setSwapNote(e.target.value)}
-                rows={3}
-                maxLength={500}
-                placeholder="Who are you hoping to swap with?"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
-              />
-            </label>
-          </div>
+          swapShift && (
+            <SwapDialogBody
+              shift={swapShift.shift}
+              shiftWeekStart={swapShift.weekStart}
+              intent={swapIntent}
+              onIntentChange={setSwapIntent}
+              startTime={swapStart}
+              onStartTimeChange={setSwapStart}
+              endTime={swapEnd}
+              onEndTimeChange={setSwapEnd}
+              partnerId={swapPartnerId}
+              onPartnerChange={setSwapPartnerId}
+              note={swapNote}
+              onNoteChange={setSwapNote}
+              coworkers={coworkers}
+              busyStaffByKey={busyStaffByKey}
+            />
+          )
         }
         confirmLabel="Send request"
         pending={actionPending}
@@ -553,6 +720,10 @@ export function StaffPageClient({
         onCancel={() => {
           setSwapShift(null);
           setSwapNote("");
+          setSwapIntent("time_change");
+          setSwapStart("09:00");
+          setSwapEnd("17:00");
+          setSwapPartnerId("");
         }}
       />
 
@@ -573,9 +744,30 @@ export function StaffPageClient({
                 </span>
               </div>
             )}
+            {leaveCategories.length > 0 && (
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-700">
+                  Reason
+                </span>
+                <select
+                  value={unavailableCategory}
+                  onChange={(e) => setUnavailableCategory(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+                >
+                  <option value="">— Choose a reason —</option>
+                  {leaveCategories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-slate-700">
-                Optional reason
+                {leaveCategories.length > 0
+                  ? "Additional details (optional)"
+                  : "Optional reason"}
               </span>
               <textarea
                 value={unavailableNote}
@@ -586,6 +778,12 @@ export function StaffPageClient({
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
               />
             </label>
+            <DialogFilePicker
+              files={unavailableFiles}
+              onChange={setUnavailableFiles}
+              error={unavailableFileError}
+              onError={setUnavailableFileError}
+            />
           </div>
         }
         confirmLabel="Send request"
@@ -594,6 +792,9 @@ export function StaffPageClient({
         onCancel={() => {
           setUnavailableCell(null);
           setUnavailableNote("");
+          setUnavailableCategory("");
+          setUnavailableFiles([]);
+          setUnavailableFileError(null);
         }}
       />
 
@@ -632,7 +833,8 @@ function QuickActionsRow({
           href={`tel:${contactPhone.replace(/\s+/g, "")}`}
           className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
         >
-          📞 Call manager
+          <Phone aria-hidden className="h-4 w-4 text-teal-600" />
+          Call manager
         </a>
       )}
       {contactEmail && (
@@ -640,7 +842,8 @@ function QuickActionsRow({
           href={`mailto:${contactEmail}`}
           className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
         >
-          ✉️ Email manager
+          <Mail aria-hidden className="h-4 w-4 text-teal-600" />
+          Email manager
         </a>
       )}
     </section>
@@ -660,12 +863,139 @@ function formatRelativeTime(iso: string): string {
   return `${days}d ago`;
 }
 
+function PartnerAwaitingCard({
+  items,
+  daysByWeek,
+  token,
+}: {
+  items: PartnerAwaitingRequest[];
+  daysByWeek: Record<string, DayCell[]>;
+  token: string;
+}) {
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-amber-900">
+          <AlertTriangle aria-hidden className="h-4 w-4 text-amber-600" />
+          Awaiting your confirmation
+        </h2>
+        <span className="text-xs font-medium text-amber-800">
+          {items.length} swap {items.length === 1 ? "request" : "requests"}
+        </span>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-amber-900/80">
+        A teammate has asked to swap one of their shifts with you. Confirm
+        only if you can cover it — your manager will see your answer before
+        moving anything on the roster.
+      </p>
+      <ul className="mt-3 space-y-2">
+        {items.map((item) => (
+          <PartnerAwaitingRow
+            key={item.id}
+            item={item}
+            daysByWeek={daysByWeek}
+            token={token}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function PartnerAwaitingRow({
+  item,
+  daysByWeek,
+  token,
+}: {
+  item: PartnerAwaitingRequest;
+  daysByWeek: Record<string, DayCell[]>;
+  token: string;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  const cell = daysByWeek[item.weekStart]?.[item.day] ?? null;
+  const dayPart = cell ? `${cell.name}, ${cell.date}` : "that day";
+
+  function confirm() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await confirmSwapAsPartner({ token, requestId: item.id });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Couldn't confirm");
+      }
+    });
+  }
+
+  function decline() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        await declineSwapAsPartner({ token, requestId: item.id });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Couldn't decline");
+      }
+    });
+  }
+
+  return (
+    <li className="rounded-lg border border-amber-200 bg-white p-3 text-sm">
+      <div className="text-sm">
+        <span className="font-semibold text-slate-900">
+          {item.requesterName}
+        </span>{" "}
+        wants to swap their{" "}
+        <span className="font-semibold text-slate-900">{dayPart}</span> shift
+        (
+        <span className="font-medium">
+          {formatRange(item.startHour, item.endHour)}
+        </span>
+        ) with you.
+      </div>
+      {item.note && (
+        <div className="mt-1 text-xs italic text-slate-600">
+          Their note: “{item.note}”
+        </div>
+      )}
+      <div className="mt-2 text-[11px] text-slate-500">
+        Sent {formatRelativeTime(item.createdAt)}
+      </div>
+      {error && (
+        <div className="mt-1 text-[11px] text-rose-600">{error}</div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={decline}
+          disabled={pending}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Decline
+        </button>
+        <button
+          type="button"
+          onClick={confirm}
+          disabled={pending}
+          className="rounded-md bg-teal-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {pending ? "Working…" : "Confirm swap"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
 function MyRequestsCard({
   requests,
   daysByWeek,
+  token,
+  leaveCategories,
 }: {
   requests: MyRequest[];
   daysByWeek: Record<string, DayCell[]>;
+  token: string;
+  leaveCategories: string[];
 }) {
   const pending = requests.filter((r) => r.status === "pending");
   const resolved = requests.filter((r) => r.status !== "pending");
@@ -710,6 +1040,8 @@ function MyRequestsCard({
                 key={req.id}
                 req={req}
                 daysByWeek={daysByWeek}
+                token={token}
+                leaveCategories={leaveCategories}
               />
             ))}
           </ul>
@@ -729,7 +1061,13 @@ function MyRequestsCard({
       </div>
       <ul className="mt-3 space-y-2">
         {pending.map((req) => (
-          <MyRequestRow key={req.id} req={req} daysByWeek={daysByWeek} />
+          <MyRequestRow
+            key={req.id}
+            req={req}
+            daysByWeek={daysByWeek}
+            token={token}
+            leaveCategories={leaveCategories}
+          />
         ))}
       </ul>
       {resolved.length > 0 && (
@@ -750,6 +1088,8 @@ function MyRequestsCard({
                   key={req.id}
                   req={req}
                   daysByWeek={daysByWeek}
+                  token={token}
+                  leaveCategories={leaveCategories}
                 />
               ))}
             </ul>
@@ -763,11 +1103,30 @@ function MyRequestsCard({
 function MyRequestRow({
   req,
   daysByWeek,
+  token,
+  leaveCategories,
 }: {
   req: MyRequest;
   daysByWeek: Record<string, DayCell[]>;
+  token: string;
+  leaveCategories: string[];
 }) {
-  const typeLabel = req.type === "swap" ? "Swap" : "Time off";
+  const isPending = req.status === "pending";
+  const showCategoryEditor =
+    req.type === "unavailable" && leaveCategories.length > 0;
+  const [editing, setEditing] = useState(false);
+  const [noteDraft, setNoteDraft] = useState(req.note ?? "");
+  const [categoryDraft, setCategoryDraft] = useState(req.reasonCategory ?? "");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [rowPending, startRowTransition] = useTransition();
+  const [rowError, setRowError] = useState<string | null>(null);
+
+  const typeLabel =
+    req.type === "swap"
+      ? "Swap"
+      : req.type === "time_change"
+        ? "Time change"
+        : "Time off";
   const cell =
     req.weekStart && typeof req.day === "number"
       ? daysByWeek[req.weekStart]?.[req.day]
@@ -783,20 +1142,61 @@ function MyRequestRow({
     req.status === "pending"
       ? {
           class: "bg-amber-100 text-amber-800",
-          icon: "●",
+          Icon: Circle,
+          iconClass: "fill-amber-500 text-amber-500",
           label: "Pending",
         }
       : req.status === "approved"
         ? {
             class: "bg-emerald-100 text-emerald-800",
-            icon: "✓",
+            Icon: Check,
+            iconClass: "text-emerald-700",
             label: "Approved",
           }
         : {
             class: "bg-slate-200 text-slate-700",
-            icon: "✕",
+            Icon: X,
+            iconClass: "text-slate-600",
             label: "Declined",
           };
+
+  function saveEdit() {
+    setRowError(null);
+    startRowTransition(async () => {
+      try {
+        await updateStaffRequestNote({
+          token,
+          requestId: req.id,
+          note: noteDraft,
+          // Only send a category update for time-off requests; swap requests
+          // ignore this parameter server-side anyway.
+          ...(req.type === "unavailable"
+            ? { reasonCategory: categoryDraft || null }
+            : {}),
+        });
+        setEditing(false);
+      } catch (e) {
+        setRowError(
+          e instanceof Error ? e.message : "Couldn't save the note",
+        );
+      }
+    });
+  }
+
+  function runCancel() {
+    setRowError(null);
+    startRowTransition(async () => {
+      try {
+        await cancelStaffRequest({ token, requestId: req.id });
+        setConfirmCancel(false);
+      } catch (e) {
+        setRowError(
+          e instanceof Error ? e.message : "Couldn't cancel the request",
+        );
+        setConfirmCancel(false);
+      }
+    });
+  }
 
   return (
     <li className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-sm">
@@ -808,21 +1208,179 @@ function MyRequestRow({
         <span
           className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${chip.class}`}
         >
-          <span aria-hidden>{chip.icon}</span>
+          <chip.Icon aria-hidden className={`h-3 w-3 ${chip.iconClass}`} />
           {chip.label}
         </span>
       </div>
       <div className="mt-1 text-xs text-slate-500">{activityLabel}</div>
-      {req.note && (
-        <div className="mt-1 text-xs italic text-slate-600">
-          Your note: “{req.note}”
+
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          {showCategoryEditor && (
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium text-slate-600">
+                Reason
+              </span>
+              <select
+                value={categoryDraft}
+                onChange={(e) => setCategoryDraft(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+              >
+                <option value="">— Choose a reason —</option>
+                {leaveCategories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <textarea
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+            rows={3}
+            maxLength={500}
+            placeholder={
+              showCategoryEditor
+                ? "Additional details (optional)…"
+                : "Add or update your note for the manager…"
+            }
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setNoteDraft(req.note ?? "");
+                setCategoryDraft(req.reasonCategory ?? "");
+                setRowError(null);
+              }}
+              disabled={rowPending}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancel edit
+            </button>
+            <button
+              type="button"
+              onClick={saveEdit}
+              disabled={rowPending}
+              className="rounded-md bg-teal-500 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {rowPending ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {req.reasonCategory && (
+            <div className="mt-1">
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                {req.reasonCategory}
+              </span>
+            </div>
+          )}
+          {req.type === "time_change" &&
+            typeof req.proposedStartHour === "number" &&
+            typeof req.proposedEndHour === "number" && (
+              <div className="mt-1 text-xs text-slate-700">
+                <span className="font-medium">Asked for:</span>{" "}
+                {formatHour(req.proposedStartHour).replace(":00", "")}
+                –
+                {formatHour(req.proposedEndHour).replace(":00", "")}
+              </div>
+            )}
+          {req.type === "swap" && req.proposedSwapWithName && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-700">
+              <span>
+                <span className="font-medium">Arranged with:</span>{" "}
+                {req.proposedSwapWithName}
+              </span>
+              {req.partnerConfirmationStatus === "agreed" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                  <Check aria-hidden className="h-3 w-3" />
+                  {req.proposedSwapWithName} confirmed
+                </span>
+              )}
+              {req.partnerConfirmationStatus === "declined" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                  <X aria-hidden className="h-3 w-3" />
+                  {req.proposedSwapWithName} declined
+                </span>
+              )}
+              {req.partnerConfirmationStatus === "requested" && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                  <AlertTriangle aria-hidden className="h-3 w-3" />
+                  Waiting on {req.proposedSwapWithName}
+                </span>
+              )}
+            </div>
+          )}
+          {req.note && (
+            <div className="mt-1 text-xs italic text-slate-600">
+              Your note: “{req.note}”
+            </div>
+          )}
+          {req.status === "declined" && req.reason && (
+            <div className="mt-1 text-xs italic text-slate-700">
+              Manager: “{req.reason}”
+            </div>
+          )}
+        </>
+      )}
+
+      {rowError && (
+        <div className="mt-1 text-[11px] text-rose-600">{rowError}</div>
+      )}
+
+      {!editing && req.attachments.length > 0 && (
+        <AttachmentListReadOnly
+          attachments={req.attachments}
+          token={token}
+        />
+      )}
+
+      {isPending && !editing && (
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setNoteDraft(req.note ?? "");
+              setCategoryDraft(req.reasonCategory ?? "");
+              setEditing(true);
+            }}
+            disabled={rowPending}
+            className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmCancel(true)}
+            disabled={rowPending}
+            className="rounded-md border border-rose-200 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel request
+          </button>
         </div>
       )}
-      {req.status === "declined" && req.reason && (
-        <div className="mt-1 text-xs italic text-slate-700">
-          Manager: “{req.reason}”
-        </div>
-      )}
+
+      <ConfirmDialog
+        open={confirmCancel}
+        title="Cancel this request?"
+        message={
+          <p>
+            {typeLabel} request{dayPart ? ` for ${dayPart.replace(" · ", "")}` : ""}
+            {" "}will be withdrawn from the manager&apos;s queue. You can always
+            send a new one if you change your mind.
+          </p>
+        }
+        confirmLabel="Cancel request"
+        destructive
+        pending={rowPending}
+        onConfirm={runCancel}
+        onCancel={() => setConfirmCancel(false)}
+      />
     </li>
   );
 }
@@ -860,7 +1418,12 @@ function UpdateBanner({
   onDismiss: () => void;
 }) {
   const approved = update.status === "approved";
-  const typeLabel = update.type === "swap" ? "Swap" : "Time off";
+  const typeLabel =
+    update.type === "swap"
+      ? "Swap"
+      : update.type === "time_change"
+        ? "Time change"
+        : "Time off";
   const cell =
     update.weekStart && typeof update.day === "number"
       ? daysByWeek[update.weekStart]?.[update.day]
@@ -870,7 +1433,8 @@ function UpdateBanner({
   const wrapperClass = approved
     ? "border-emerald-200 bg-emerald-50 text-emerald-900"
     : "border-slate-200 bg-slate-50 text-slate-800";
-  const iconChar = approved ? "✓" : "✕";
+  const StatusIcon = approved ? Check : X;
+  const statusIconClass = approved ? "text-emerald-700" : "text-slate-600";
 
   return (
     <div
@@ -878,12 +1442,15 @@ function UpdateBanner({
       role="status"
     >
       <div className="flex-1 text-sm">
-        <div className="font-semibold">
-          <span className="mr-1" aria-hidden>
-            {iconChar}
+        <div className="flex items-center gap-1.5 font-semibold">
+          <StatusIcon
+            aria-hidden
+            className={`h-4 w-4 ${statusIconClass}`}
+          />
+          <span>
+            {typeLabel} request {approved ? "approved" : "declined"}
+            {dayPart}
           </span>
-          {typeLabel} request {approved ? "approved" : "declined"}
-          {dayPart}
         </div>
         {update.reason && (
           <div className="mt-0.5 text-xs italic opacity-80">
@@ -903,20 +1470,375 @@ function UpdateBanner({
   );
 }
 
+function SwapDialogBody({
+  shift,
+  shiftWeekStart,
+  intent,
+  onIntentChange,
+  startTime,
+  onStartTimeChange,
+  endTime,
+  onEndTimeChange,
+  partnerId,
+  onPartnerChange,
+  note,
+  onNoteChange,
+  coworkers,
+  busyStaffByKey,
+}: {
+  shift: Shift;
+  shiftWeekStart: string;
+  intent: "time_change" | "cover";
+  onIntentChange: (next: "time_change" | "cover") => void;
+  startTime: string;
+  onStartTimeChange: (next: string) => void;
+  endTime: string;
+  onEndTimeChange: (next: string) => void;
+  partnerId: string;
+  onPartnerChange: (next: string) => void;
+  note: string;
+  onNoteChange: (next: string) => void;
+  coworkers: { id: string; firstName: string; role: string }[];
+  busyStaffByKey: Record<string, string[]>;
+}) {
+  const busyThatDay = new Set(
+    busyStaffByKey[`${shiftWeekStart}:${shift.day}`] ?? [],
+  );
+  const freeCoworkers = coworkers.filter((c) => !busyThatDay.has(c.id));
+  const busyCoworkers = coworkers.filter((c) => busyThatDay.has(c.id));
+
+  const startH = timeStringToHour(startTime);
+  const endHRaw = timeStringToHour(endTime);
+  const endH = endHRaw <= startH ? endHRaw + 24 : endHRaw;
+  const overnight = endHRaw <= startH;
+  const unchanged =
+    Math.abs(startH - shift.startHour) < 0.01 &&
+    Math.abs(endH - shift.endHour) < 0.01;
+  const invalidTimes = endH <= startH;
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-slate-600">
+        Current shift:{" "}
+        <span className="font-semibold text-slate-800">
+          {formatRange(shift.startHour, shift.endHour)}
+        </span>
+      </div>
+
+      <div>
+        <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-slate-500">
+          What do you need?
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => onIntentChange("time_change")}
+            className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+              intent === "time_change"
+                ? "border-teal-400 bg-teal-50 text-teal-800 ring-1 ring-teal-200"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <div className="font-semibold">Change the time</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">
+              Keep me on the shift, different hours
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => onIntentChange("cover")}
+            className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+              intent === "cover"
+                ? "border-teal-400 bg-teal-50 text-teal-800 ring-1 ring-teal-200"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            <div className="font-semibold">Someone else covers</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">
+              Hand this shift to a coworker
+            </div>
+          </button>
+        </div>
+      </div>
+
+      {intent === "time_change" ? (
+        <div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">
+                Start time
+              </span>
+              <input
+                type="time"
+                value={startTime}
+                onChange={(e) => onStartTimeChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                {formatHour(startH).toUpperCase()}
+              </span>
+            </label>
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-700">
+                End time
+              </span>
+              <input
+                type="time"
+                value={endTime}
+                onChange={(e) => onEndTimeChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                {formatHour(endHRaw).toUpperCase()}
+                {overnight ? " (next day)" : ""}
+              </span>
+            </label>
+          </div>
+          {invalidTimes && (
+            <p className="mt-1 text-[11px] text-rose-600">
+              End time must be after start time.
+            </p>
+          )}
+          {!invalidTimes && unchanged && (
+            <p className="mt-1 text-[11px] text-amber-700">
+              These are the current times — change them to request an
+              adjustment.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">
+              I&apos;ve arranged with (optional)
+            </span>
+            <select
+              value={partnerId}
+              onChange={(e) => onPartnerChange(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            >
+              <option value="">— Not yet arranged —</option>
+              {freeCoworkers.length > 0 && (
+                <optgroup label="Free that day">
+                  {freeCoworkers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.firstName} · {c.role}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {busyCoworkers.length > 0 && (
+                <optgroup label="Already rostered that day">
+                  {busyCoworkers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.firstName} · {c.role}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              If you&apos;ve already talked to someone, pick their name so
+              your manager knows the plan.
+            </span>
+          </label>
+        </div>
+      )}
+
+      <label className="block text-sm">
+        <span className="mb-1 block font-medium text-slate-700">
+          Note for your manager (optional)
+        </span>
+        <textarea
+          value={note}
+          onChange={(e) => onNoteChange(e.target.value)}
+          rows={2}
+          maxLength={500}
+          placeholder={
+            intent === "time_change"
+              ? "e.g. bus only gets me in at 10"
+              : "e.g. Mike agreed to cover"
+          }
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-base focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+        />
+      </label>
+    </div>
+  );
+}
+
+const ATTACHMENT_MIME_ALLOWLIST = [
+  "image/jpeg",
+  "image/png",
+  "image/heic",
+  "image/heif",
+  "image/webp",
+  "application/pdf",
+] as const;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS = 3;
+
+function DialogFilePicker({
+  files,
+  onChange,
+  error,
+  onError,
+}: {
+  files: File[];
+  onChange: (next: File[]) => void;
+  error: string | null;
+  onError: (err: string | null) => void;
+}) {
+  const hasRoom = files.length < MAX_ATTACHMENTS;
+
+  function addFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    onError(null);
+    if (
+      !(ATTACHMENT_MIME_ALLOWLIST as readonly string[]).includes(file.type)
+    ) {
+      onError("Unsupported file type — use JPG, PNG, HEIC, WebP, or PDF.");
+      return;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      onError(
+        `File exceeds the 5 MB limit (got ${Math.round(file.size / 1024)} KB).`,
+      );
+      return;
+    }
+    if (files.length >= MAX_ATTACHMENTS) {
+      onError(`You can attach at most ${MAX_ATTACHMENTS} files.`);
+      return;
+    }
+    if (files.some((f) => f.name === file.name && f.size === file.size)) {
+      onError("That file is already attached.");
+      return;
+    }
+    onChange([...files, file]);
+  }
+
+  function removeAt(idx: number) {
+    onChange(files.filter((_, i) => i !== idx));
+    onError(null);
+  }
+
+  return (
+    <div>
+      <span className="mb-1 block text-sm font-medium text-slate-700">
+        Attach file (optional)
+      </span>
+      {files.length > 0 && (
+        <ul className="mb-2 space-y-1">
+          {files.map((f, i) => (
+            <li
+              key={`${f.name}-${i}`}
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs"
+            >
+              <Paperclip
+                aria-hidden
+                className="h-3.5 w-3.5 shrink-0 text-slate-400"
+              />
+              <span className="flex-1 truncate font-medium text-slate-800">
+                {f.name}
+              </span>
+              <span className="shrink-0 text-[10px] text-slate-400">
+                {formatSize(f.size)}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeAt(i)}
+                aria-label={`Remove ${f.name}`}
+                className="shrink-0 rounded text-slate-400 transition hover:text-rose-600"
+              >
+                <X aria-hidden className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasRoom && (
+        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-dashed border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-600 transition hover:border-teal-300 hover:text-teal-700">
+          <Paperclip aria-hidden className="h-4 w-4" />
+          {files.length === 0 ? "Add a file" : "Add another file"}
+          <input
+            type="file"
+            accept={ATTACHMENT_MIME_ALLOWLIST.join(",")}
+            className="hidden"
+            onChange={addFile}
+          />
+        </label>
+      )}
+      <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        JPG, PNG, HEIC, WebP, or PDF · up to 5 MB · max {MAX_ATTACHMENTS}{" "}
+        files. Only your manager sees uploaded files.
+      </p>
+      {error && <p className="mt-1 text-[11px] text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function AttachmentListReadOnly({
+  attachments,
+  token,
+}: {
+  attachments: MyRequestAttachment[];
+  token: string;
+}) {
+  return (
+    <ul className="mt-2 space-y-1">
+      {attachments.map((att) => (
+        <li
+          key={att.id}
+          className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs"
+        >
+          <Paperclip
+            aria-hidden
+            className="h-3.5 w-3.5 shrink-0 text-slate-400"
+          />
+          <a
+            href={`/api/request-attachments/${att.id}?token=${encodeURIComponent(token)}&inline=1`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 truncate font-medium text-teal-700 underline-offset-2 hover:underline"
+          >
+            {att.filename}
+          </a>
+          <span className="shrink-0 text-[10px] text-slate-400">
+            {formatSize(att.sizeBytes)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function DeclinedChip({
   type,
   reason,
 }: {
-  type: "swap" | "unavailable";
+  type: "swap" | "unavailable" | "time_change";
   reason: string | null;
 }) {
-  const label = type === "swap" ? "Swap declined" : "Time off declined";
+  const label =
+    type === "swap"
+      ? "Swap declined"
+      : type === "time_change"
+        ? "Time change declined"
+        : "Time off declined";
   return (
     <span
       className="inline-flex max-w-full items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700"
       title={reason ?? undefined}
     >
-      ✕ {label}
+      <X aria-hidden className="h-3 w-3 text-slate-600" />
+      {label}
       {reason && (
         <span className="ml-1 truncate font-normal italic text-slate-600">
           “{reason}”

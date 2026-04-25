@@ -141,6 +141,38 @@ function initDb() {
       "ALTER TABLE business_settings ADD COLUMN coverage_rules TEXT",
     );
   }
+  if (!settingsExisting.has("leave_reason_categories")) {
+    sqlite.exec(
+      "ALTER TABLE business_settings ADD COLUMN leave_reason_categories TEXT",
+    );
+  }
+  if (!settingsExisting.has("manager_password_hash")) {
+    sqlite.exec(
+      "ALTER TABLE business_settings ADD COLUMN manager_password_hash TEXT",
+    );
+  }
+
+  // Manager session tokens. Short-lived, deleted on logout or expiry.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS manager_sessions (
+      token TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+  `);
+
+  // Attachments for staff requests (medical certs, supporting docs, etc).
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS staff_request_attachments (
+      id TEXT PRIMARY KEY,
+      request_id TEXT NOT NULL REFERENCES staff_requests(id),
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      data BLOB NOT NULL,
+      uploaded_at TEXT NOT NULL
+    );
+  `);
 
   // shifts: updated_at for the "last updated" indicator on the staff page.
   const shiftCols = sqlite
@@ -176,6 +208,36 @@ function initDb() {
   if (!requestExisting.has("resolution_note")) {
     sqlite.exec(
       "ALTER TABLE staff_requests ADD COLUMN resolution_note TEXT",
+    );
+  }
+  if (!requestExisting.has("reason_category")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN reason_category TEXT",
+    );
+  }
+  if (!requestExisting.has("proposed_start_hour")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN proposed_start_hour REAL",
+    );
+  }
+  if (!requestExisting.has("proposed_end_hour")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN proposed_end_hour REAL",
+    );
+  }
+  if (!requestExisting.has("proposed_swap_with_staff_id")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN proposed_swap_with_staff_id TEXT",
+    );
+  }
+  if (!requestExisting.has("partner_confirmation_status")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN partner_confirmation_status TEXT",
+    );
+  }
+  if (!requestExisting.has("partner_confirmation_at")) {
+    sqlite.exec(
+      "ALTER TABLE staff_requests ADD COLUMN partner_confirmation_at TEXT",
     );
   }
 

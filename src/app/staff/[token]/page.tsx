@@ -6,9 +6,11 @@ import {
   businessSettings as settingsTable,
   shifts as shiftsTable,
   staff as staffTable,
+  staffRequestAttachments as attachmentsTable,
   staffRequests as staffRequestsTable,
 } from "@/db/schema";
 import { addDays, daysForWeek, startOfWeek } from "@/lib/date";
+import { parseLeaveCategories } from "@/lib/leave-categories";
 import { holidaysForWeekStarts } from "@/lib/public-holidays";
 import type { Shift, Staff } from "@/lib/types";
 
@@ -49,6 +51,7 @@ export default async function StaffPortalPage({
     settingsRows,
     myPendingRows,
     myResolvedRows,
+    partnerAwaitingRows,
   ] = await Promise.all([
     db
       .select({
@@ -92,6 +95,18 @@ export default async function StaffPortalPage({
           gte(staffRequestsTable.resolvedAt, resolvedSince),
         ),
       ),
+    // Requests where this staff is the named swap partner and hasn't
+    // responded yet. Drives the "Awaiting your confirmation" card.
+    db
+      .select()
+      .from(staffRequestsTable)
+      .where(
+        and(
+          eq(staffRequestsTable.proposedSwapWithStaffId, me.id),
+          eq(staffRequestsTable.status, "pending"),
+          eq(staffRequestsTable.partnerConfirmationStatus, "requested"),
+        ),
+      ),
   ]);
 
   const myDeclinedRows = myResolvedRows.filter(
@@ -101,6 +116,9 @@ export default async function StaffPortalPage({
   const businessName = settingsRows[0]?.businessName ?? "Your Business";
   const contactPhone = settingsRows[0]?.contactPhone ?? null;
   const contactEmail = settingsRows[0]?.contactEmail ?? null;
+  const leaveCategories = parseLeaveCategories(
+    settingsRows[0]?.leaveReasonCategories,
+  );
 
   // Strip to first name + role for the team view. Never expose last names,
   // pay, or full staff metadata via this surface.
@@ -212,20 +230,45 @@ export default async function StaffPortalPage({
     }
   }
 
+  // Shifts referenced by requests (mine + ones asking me to swap) may sit
+  // outside the visible 4-week window. Fetch those by ID so the "Awaiting
+  // your confirmation" card and the My requests rows always render the
+  // correct shift time and day, not just the labelless fallback.
+  const referencedShiftIds = new Set<string>();
+  for (const r of [...myPendingRows, ...myResolvedRows, ...partnerAwaitingRows]) {
+    if (r.shiftId) referencedShiftIds.add(r.shiftId);
+  }
+  const loadedShiftIds = new Set(shiftRows.map((r) => r.id));
+  const missingShiftIds = [...referencedShiftIds].filter(
+    (id) => !loadedShiftIds.has(id),
+  );
+  const extraShiftRows = missingShiftIds.length
+    ? await db
+        .select()
+        .from(shiftsTable)
+        .where(inArray(shiftsTable.id, missingShiftIds))
+    : [];
+
   // Recently-declined requests: one per (weekStart:day) so the staff portal
   // can tag the affected row with a "Declined" chip and show the manager's
   // optional reason. Swap declines key off the shift's cell via shiftRows.
-  const shiftRowById = new Map(shiftRows.map((r) => [r.id, r]));
+  const shiftRowById = new Map(
+    [...shiftRows, ...extraShiftRows].map((r) => [r.id, r]),
+  );
   const declinedByKey: Record<
     string,
-    { type: "swap" | "unavailable"; reason: string | null; resolvedAt: string }
+    {
+      type: "swap" | "unavailable" | "time_change";
+      reason: string | null;
+      resolvedAt: string;
+    }
   > = {};
   for (const r of myDeclinedRows) {
     if (!r.resolvedAt) continue;
     let key: string | null = null;
     if (r.type === "unavailable" && r.weekStart && typeof r.day === "number") {
       key = `${r.weekStart}:${r.day}`;
-    } else if (r.type === "swap" && r.shiftId) {
+    } else if ((r.type === "swap" || r.type === "time_change") && r.shiftId) {
       const sh = shiftRowById.get(r.shiftId);
       if (sh) key = `${sh.weekStart}:${sh.day}`;
     }
@@ -233,8 +276,14 @@ export default async function StaffPortalPage({
     // Keep the most recently resolved entry if multiple exist for the cell.
     const prev = declinedByKey[key];
     if (!prev || r.resolvedAt > prev.resolvedAt) {
+      const chipType: "swap" | "unavailable" | "time_change" =
+        r.type === "swap"
+          ? "swap"
+          : r.type === "time_change"
+            ? "time_change"
+            : "unavailable";
       declinedByKey[key] = {
-        type: r.type === "swap" ? "swap" : "unavailable",
+        type: chipType,
         reason: r.resolutionNote ?? null,
         resolvedAt: r.resolvedAt,
       };
@@ -251,18 +300,27 @@ export default async function StaffPortalPage({
       let resolvedWeekStart: string | null = r.weekStart;
       let resolvedDay: number | null =
         typeof dayIdx === "number" ? dayIdx : null;
-      // Swap requests carry a shiftId but not an explicit weekStart/day.
+      // Swap and time_change carry a shiftId, not explicit weekStart/day.
       // Recover them from the shift so the banner can show the date.
-      if (r.type === "swap" && r.shiftId) {
+      if (
+        (r.type === "swap" || r.type === "time_change") &&
+        r.shiftId
+      ) {
         const sh = shiftRowById.get(r.shiftId);
         if (sh) {
           resolvedWeekStart = sh.weekStart;
           resolvedDay = sh.day;
         }
       }
+      const bannerType: "swap" | "unavailable" | "time_change" =
+        r.type === "swap"
+          ? "swap"
+          : r.type === "time_change"
+            ? "time_change"
+            : "unavailable";
       return {
         id: r.id,
-        type: r.type === "swap" ? ("swap" as const) : ("unavailable" as const),
+        type: bannerType,
         status:
           r.status === "approved" ? ("approved" as const) : ("declined" as const),
         weekStart: resolvedWeekStart,
@@ -273,23 +331,68 @@ export default async function StaffPortalPage({
     })
     .sort((a, b) => (a.resolvedAt < b.resolvedAt ? 1 : -1));
 
+  // Attachment summaries for every request in scope — the actual BLOBs are
+  // streamed on demand via the /api/request-attachments route.
+  const myRequestIds = [
+    ...myPendingRows.map((r) => r.id),
+    ...myResolvedRows.map((r) => r.id),
+  ];
+  const attachmentRows = myRequestIds.length
+    ? await db
+        .select({
+          id: attachmentsTable.id,
+          requestId: attachmentsTable.requestId,
+          filename: attachmentsTable.filename,
+          mimeType: attachmentsTable.mimeType,
+          sizeBytes: attachmentsTable.sizeBytes,
+        })
+        .from(attachmentsTable)
+        .where(inArray(attachmentsTable.requestId, myRequestIds))
+    : [];
+  const attachmentsByRequest = new Map<
+    string,
+    { id: string; filename: string; mimeType: string; sizeBytes: number }[]
+  >();
+  for (const att of attachmentRows) {
+    const list = attachmentsByRequest.get(att.requestId) ?? [];
+    list.push({
+      id: att.id,
+      filename: att.filename,
+      mimeType: att.mimeType,
+      sizeBytes: att.sizeBytes,
+    });
+    attachmentsByRequest.set(att.requestId, list);
+  }
+
   // Combined "My requests" list (pending + recently-resolved in the same 48h
   // window). Powers the glanceable status card at the top of the portal so
   // staff don't have to scroll to the affected week to know where a request
   // stands — relevant when they filed something 3 or 4 weeks out.
+  const staffNameById = new Map<string, string>();
+  for (const s of allStaffRows) {
+    staffNameById.set(s.id, s.name.split(/\s+/)[0] ?? s.name);
+  }
+
   function normaliseRequest(r: (typeof myResolvedRows)[number]) {
     let weekStart: string | null = r.weekStart;
     let day: number | null = typeof r.day === "number" ? r.day : null;
-    if (r.type === "swap" && r.shiftId) {
+    // Both swap and time_change carry a shiftId instead of weekStart/day.
+    if ((r.type === "swap" || r.type === "time_change") && r.shiftId) {
       const sh = shiftRowById.get(r.shiftId);
       if (sh) {
         weekStart = sh.weekStart;
         day = sh.day;
       }
     }
+    const reqType: "swap" | "unavailable" | "time_change" =
+      r.type === "swap"
+        ? "swap"
+        : r.type === "time_change"
+          ? "time_change"
+          : "unavailable";
     return {
       id: r.id,
-      type: r.type === "swap" ? ("swap" as const) : ("unavailable" as const),
+      type: reqType,
       status:
         r.status === "approved"
           ? ("approved" as const)
@@ -299,11 +402,46 @@ export default async function StaffPortalPage({
       weekStart,
       day,
       note: r.note ?? null,
+      reasonCategory: r.reasonCategory ?? null,
+      proposedStartHour: r.proposedStartHour ?? null,
+      proposedEndHour: r.proposedEndHour ?? null,
+      proposedSwapWithName: r.proposedSwapWithStaffId
+        ? (staffNameById.get(r.proposedSwapWithStaffId) ?? null)
+        : null,
+      partnerConfirmationStatus: (r.partnerConfirmationStatus ?? null) as
+        | "requested"
+        | "agreed"
+        | "declined"
+        | null,
       reason: r.resolutionNote ?? null,
       createdAt: r.createdAt,
       resolvedAt: r.resolvedAt ?? null,
+      attachments: attachmentsByRequest.get(r.id) ?? [],
     };
   }
+
+  // Requests where the current staff is the named swap partner and hasn't
+  // responded yet. Flatten to the shape the "Awaiting your confirmation"
+  // card needs: who's asking, the shift on offer, and any note.
+  const partnerAwaiting = partnerAwaitingRows
+    .map((r) => {
+      const sh = r.shiftId ? shiftRowById.get(r.shiftId) : null;
+      if (!sh) return null;
+      return {
+        id: r.id,
+        requesterName: staffNameById.get(r.staffId) ?? "A teammate",
+        weekStart: sh.weekStart,
+        day: sh.day,
+        startHour: sh.startHour,
+        endHour: sh.endHour,
+        note: r.note ?? null,
+        createdAt: r.createdAt,
+      };
+    })
+    .filter(
+      (x): x is NonNullable<typeof x> => x !== null,
+    )
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
   const myRequests = [
     ...myPendingRows.map(normaliseRequest),
@@ -339,6 +477,23 @@ export default async function StaffPortalPage({
     initials: me.initials,
   };
 
+  // Coworker roster (first names + roles only — privacy-safe for the staff
+  // portal) and a busy-staff lookup so the Request-swap dialog can default
+  // the "who to swap with" dropdown to people who are actually free on the
+  // shift's day.
+  const coworkers = allStaffRows
+    .filter((s) => s.id !== me.id)
+    .map((s) => ({
+      id: s.id,
+      firstName: s.name.split(/\s+/)[0] ?? s.name,
+      role: s.role,
+    }));
+  const busyStaffByKey: Record<string, string[]> = {};
+  for (const r of shiftRows) {
+    const k = `${r.weekStart}:${r.day}`;
+    (busyStaffByKey[k] ??= []).push(r.staffId);
+  }
+
   return (
     <StaffPortalPageShell businessName={businessName}>
       <StaffPageClient
@@ -357,6 +512,10 @@ export default async function StaffPortalPage({
         declinedByKey={declinedByKey}
         recentResolutions={recentResolutions}
         myRequests={myRequests}
+        leaveCategories={leaveCategories}
+        coworkers={coworkers}
+        busyStaffByKey={busyStaffByKey}
+        partnerAwaiting={partnerAwaiting}
         contactPhone={contactPhone}
         contactEmail={contactEmail}
         lastUpdatedAt={myLastUpdatedAt}

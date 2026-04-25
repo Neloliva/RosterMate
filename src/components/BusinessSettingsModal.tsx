@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { updateBusinessSettings } from "@/app/actions";
 import { emptyCoverageRules } from "@/lib/coverage";
+import { DEFAULT_LEAVE_CATEGORIES } from "@/lib/leave-categories";
 import {
   BUSINESS_TYPES,
   INDUSTRY_SETTINGS_DEFAULTS,
@@ -38,6 +39,9 @@ export function BusinessSettingsModal({
   const [coverage, setCoverage] = useState<CoverageRules>(
     settings.coverageRules ?? emptyCoverageRules(),
   );
+  const [leaveCategories, setLeaveCategories] = useState<string[]>(
+    settings.leaveReasonCategories ?? [...DEFAULT_LEAVE_CATEGORIES],
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
@@ -51,6 +55,9 @@ export function BusinessSettingsModal({
       setContactPhone(settings.contactPhone ?? "");
       setContactEmail(settings.contactEmail ?? "");
       setCoverage(settings.coverageRules ?? emptyCoverageRules());
+      setLeaveCategories(
+        settings.leaveReasonCategories ?? [...DEFAULT_LEAVE_CATEGORIES],
+      );
       setError(null);
     }
   }, [open, settings]);
@@ -92,6 +99,7 @@ export function BusinessSettingsModal({
           contactPhone,
           contactEmail,
           coverageRules: coverage,
+          leaveReasonCategories: leaveCategories,
         });
         onClose();
       } catch (e) {
@@ -292,6 +300,11 @@ export function BusinessSettingsModal({
 
           <CoverageRulesBlock value={coverage} onChange={setCoverage} />
 
+          <LeaveCategoriesBlock
+            value={leaveCategories}
+            onChange={setLeaveCategories}
+          />
+
           {error && <p className="text-xs text-rose-500">{error}</p>}
         </div>
 
@@ -418,6 +431,127 @@ function CoverageRulesBlock({
             ? "Role check is optional — leave blank to only track total headcount."
             : "Leave blank to disable all coverage checks."}
       </span>
+    </div>
+  );
+}
+
+function LeaveCategoriesBlock({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const MAX = 12;
+
+  function addCategory() {
+    setError(null);
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) {
+      setError("Keep category names under 40 characters.");
+      return;
+    }
+    const exists = value.some(
+      (c) => c.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (exists) {
+      setError("That category is already in the list.");
+      return;
+    }
+    if (value.length >= MAX) {
+      setError(`You can have at most ${MAX} categories.`);
+      return;
+    }
+    onChange([...value, trimmed]);
+    setDraft("");
+  }
+
+  function removeAt(idx: number) {
+    onChange(value.filter((_, i) => i !== idx));
+  }
+
+  function renameAt(idx: number, raw: string) {
+    const next = value.slice();
+    next[idx] = raw;
+    onChange(next);
+  }
+
+  return (
+    <div>
+      <span className="mb-1 block text-sm font-medium text-slate-700">
+        Leave reason categories
+      </span>
+      <p className="mb-2 text-[11px] text-slate-500">
+        Staff pick from this list when requesting time off. Keeping the set
+        short and consistent lets you run reports — &quot;how much time off
+        was medical vs family vs vacation&quot; — instead of parsing free
+        text. Leave the list empty to drop the dropdown entirely and just
+        capture the free-text note.
+      </p>
+      {value.length === 0 ? (
+        <p className="mb-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+          No categories set — staff portal will show the free-text note only.
+        </p>
+      ) : (
+        <ul className="mb-2 space-y-1.5">
+          {value.map((cat, idx) => (
+            <li
+              key={idx}
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5"
+            >
+              <input
+                type="text"
+                value={cat}
+                maxLength={40}
+                onChange={(e) => renameAt(idx, e.target.value)}
+                className="flex-1 rounded px-2 py-1 text-sm text-slate-800 focus:border-teal-400 focus:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-teal-100"
+              />
+              <button
+                type="button"
+                onClick={() => removeAt(idx)}
+                aria-label={`Remove ${cat}`}
+                className="rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-600 transition hover:bg-rose-50"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={draft}
+          maxLength={40}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCategory();
+            }
+          }}
+          placeholder="Add a category — e.g. Bereavement"
+          className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
+        />
+        <button
+          type="button"
+          onClick={addCategory}
+          disabled={!draft.trim() || value.length >= MAX}
+          className="rounded-lg bg-teal-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          Add
+        </button>
+      </div>
+      {error && (
+        <p className="mt-1 text-[11px] text-rose-600">{error}</p>
+      )}
+      <p className="mt-1 text-[11px] text-slate-500">
+        {value.length} of {MAX} categories · rename by typing, reorder not
+        supported yet (shows in the order added).
+      </p>
     </div>
   );
 }
