@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { Metadata } from "next";
+import { PageNav } from "@/components/PageNav";
 
 export const metadata: Metadata = {
   title: "RosterMate — rostering for Australian small businesses",
@@ -13,6 +14,7 @@ const COMPARISON_LAST_UPDATED = "April 2026";
 export default function AboutPage() {
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-10 sm:px-8 sm:py-14">
+      <PageNav current="about" />
       <Hero />
       <ProductTour />
       <PitchCards />
@@ -510,7 +512,7 @@ function ComparisonTable() {
         larger product teams than RosterMate and have maintained AU award
         libraries. If your compliance exposure is high (mid-size hospitality,
         multi-site retail, aged care) and you can afford the per-user pricing,
-        they are the stronger choice on compliance. RosterMate's case is for
+        they are the stronger choice on compliance. RosterMate&apos;s case is for
         owner-operators who value simplicity, a no-login staff surface, and
         honest cost modelling over enterprise depth.
       </div>
@@ -661,8 +663,8 @@ function WhoFor() {
           </li>
           <li>• Owner-operator or single manager building the weekly roster</li>
           <li>
-            • Value staff having instant schedule access over "enterprise
-            workforce management"
+            • Value staff having instant schedule access over &quot;enterprise
+            workforce management&quot;
           </li>
           <li>• Casual-heavy team where account-based apps feel like friction</li>
           <li>• Exporting to an accountant or bookkeeper, not running payroll in-app</li>
@@ -702,7 +704,7 @@ function CallToAction() {
           Book a 20-minute demo
         </h2>
         <p className="mt-4 text-base leading-relaxed text-slate-700">
-          We'll build a live roster with your week's shifts, text you the staff
+          We&apos;ll build a live roster with your week&apos;s shifts, text you the staff
           portal link to open on your phone, and walk through a swap + time-off
           approval loop end-to-end. No slide deck. No pressure.
         </p>

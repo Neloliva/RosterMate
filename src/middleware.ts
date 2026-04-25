@@ -7,7 +7,7 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth-constants";
 // lives in server actions and page components.
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|_next/|api|login|staff|about|history|DevHelp|favicon.ico|manifest.json|sw.js|screenshots|robots.txt).*)",
+    "/((?!_next/static|_next/image|_next/|api|login|staff|about|history|DevHelp|projectplan|how-it-works|favicon.ico|manifest.json|sw.js|screenshots|robots.txt).*)",
   ],
 };
 

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { PageNav } from "@/components/PageNav";
 
 export const metadata: Metadata = {
   title: "RosterMate · History — what we've built so far",
@@ -273,6 +274,7 @@ export default function HistoryPage() {
   const totalEntries = PHASES.reduce((sum, p) => sum + p.entries.length, 0);
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10 sm:px-8 sm:py-14">
+      <PageNav current="history" />
       <Header totalEntries={totalEntries} />
       {PHASES.map((phase) => (
         <PhaseSection key={phase.number} phase={phase} />

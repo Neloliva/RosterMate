@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { PageNav } from "@/components/PageNav";
 
 export const metadata: Metadata = {
   title: "RosterMate · DevHelp — what to build next",
@@ -209,6 +210,7 @@ const BUCKET_B: BucketBItem[] = [
 export default function DevHelpPage() {
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-10 sm:px-8 sm:py-14">
+      <PageNav current="DevHelp" />
       <Header />
       <Intro />
       <Tldr />
